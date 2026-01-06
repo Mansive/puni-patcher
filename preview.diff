@@ -9,30 +9,6 @@ index 0be76d85cd..2e50a5fded 100644
 +
 +libfrida*
 \ No newline at end of file
-diff --git a/docs/eden-puni.code-workspace b/docs/eden-puni.code-workspace
-new file mode 100644
-index 0000000000..0096a20e73
---- /dev/null
-+++ b/docs/eden-puni.code-workspace
-@@ -0,0 +1,18 @@
-+{
-+  "folders": [
-+	{
-+		"name": "scripts",
-+		"path": "../../../../Software/Agent/data/scripts"
-+	},
-+	{
-+		"path": ".."
-+	},
-+	{
-+		"path": "../../frida-gum"
-+	}
-+],
-+  "settings": {
-+    "editor.tabSize": 2,
-+    "editor.detectIndentation": true
-+  }
-+}
 diff --git a/src/android/app/build.gradle.kts b/src/android/app/build.gradle.kts
 index 61e817e546..1b4c042705 100644
 --- a/src/android/app/build.gradle.kts
@@ -65,20 +41,6 @@ index 61e817e546..1b4c042705 100644
                          *extraCMakeArgs.toTypedArray()
                      )
                  )
-diff --git a/src/android/app/src/main/AndroidManifest.xml b/src/android/app/src/main/AndroidManifest.xml
-index 13007f10e4..3ab353b7b9 100644
---- a/src/android/app/src/main/AndroidManifest.xml
-+++ b/src/android/app/src/main/AndroidManifest.xml
-@@ -47,7 +47,8 @@ SPDX-License-Identifier: GPL-3.0-or-later
-         android:fullBackupContent="@xml/data_extraction_rules"
-         android:dataExtractionRules="@xml/data_extraction_rules_api_31"
-         tools:targetApi="33"
--        android:enableOnBackInvokedCallback="true">
-+        android:enableOnBackInvokedCallback="true"
-+        android:extractNativeLibs="true">
- 
-         <meta-data android:name="com.samsung.android.gamehub" android:value="true" />
-         <meta-data android:name="com.xiaomi.gamecenter.sdk.service.enabled" android:value="true" />
 diff --git a/src/android/gradle.properties b/src/android/gradle.properties
 index 151f7378d6..13ba3bca33 100644
 --- a/src/android/gradle.properties
