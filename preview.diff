@@ -41,19 +41,6 @@ index 61e817e546..1b4c042705 100644
                          *extraCMakeArgs.toTypedArray()
                      )
                  )
-diff --git a/src/android/gradle.properties b/src/android/gradle.properties
-index 151f7378d6..13ba3bca33 100644
---- a/src/android/gradle.properties
-+++ b/src/android/gradle.properties
-@@ -18,4 +18,5 @@ android.defaults.buildfeatures.buildconfig=true
- 
- # Android Gradle plugin 8.0.2
- android.suppressUnsupportedCompileSdk=34
--android.native.buildOutput=verbose
-\ No newline at end of file
-+android.native.buildOutput=verbose
-+YUZU_ANDROID_ARGS=-DUSE_CCACHE=true
-\ No newline at end of file
 diff --git a/src/core/CMakeLists.txt b/src/core/CMakeLists.txt
 index a961eff8bf..6f39ed0fa5 100644
 --- a/src/core/CMakeLists.txt

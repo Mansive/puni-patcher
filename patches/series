@@ -1,3 +1,4 @@
 0001-Implement-NCE-hooking-support.patch
 0002-Ignore-libfrida-files.patch
 0003-Revert-change-to-AndroidManifest.xml.patch
+0004-Revert-ccache-property-in-gradle.properties.patch

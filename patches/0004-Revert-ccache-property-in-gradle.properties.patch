@@ -1,0 +1,23 @@
+From 591034aba4064676ee6e166a4ec245a4a81e0e51 Mon Sep 17 00:00:00 2001
+From: Mansive <33560917+Mansive@users.noreply.github.com>
+Date: Mon, 5 Jan 2026 22:57:54 -0600
+Subject: [PATCH] Revert ccache property in gradle.properties
+
+Should be set in gradle.properties located in user home directory instead
+---
+ src/android/gradle.properties | 3 +--
+ 1 file changed, 1 insertion(+), 2 deletions(-)
+
+diff --git a/src/android/gradle.properties b/src/android/gradle.properties
+index 13ba3bca33..151f7378d6 100644
+--- a/src/android/gradle.properties
++++ b/src/android/gradle.properties
+@@ -18,5 +18,4 @@ android.defaults.buildfeatures.buildconfig=true
+ 
+ # Android Gradle plugin 8.0.2
+ android.suppressUnsupportedCompileSdk=34
+-android.native.buildOutput=verbose
+-YUZU_ANDROID_ARGS=-DUSE_CCACHE=true
+\ No newline at end of file
++android.native.buildOutput=verbose
+\ No newline at end of file
