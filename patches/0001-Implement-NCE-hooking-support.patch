@@ -1,0 +1,1258 @@
+From 2e1b3901d1e56fe5feb7134d268dd83ebe1ce8fb Mon Sep 17 00:00:00 2001
+From: Mansive <33560917+Mansive@users.noreply.github.com>
+Date: Fri, 2 Jan 2026 16:38:42 -0600
+Subject: [PATCH 1/2] Implement NCE hooking support
+
+Remove Frida binaries
+
+Delete NCEHooks.md
+
+Update NCEHooks with instruction emulation
+
+Emulate PC-relative instructions
+
+Nerf logging level
+
+Preliminary fix for multi title games
+
+Get logs from Eden into Agent
+
+Remove unneeded functions
+
+Revert some arm_nce format changes
+
+Remove unneeded instruction emulation functions
+
+Try reverting k_process format changes
+
+Reduce merge conflict?
+
+Minimize patch footprint to avoid merge conflicts
+
+Spacing changes
+
+Clarify guest vs host addresses
+
+Hybrid trampoline and instruction emulation
+
+Shift some control to Frida
+
+Create eden-puni.code-workspace
+
+Impart upon mine human hand
+
+Rename NCE doc
+
+Refine NCE Hoods.md
+
+Create NCE Hooks.md
+
+Add Olympia Soiree
+
+Guess actual base address
+
+Remove unnecessary files
+
+Generic emulation for replaced instructions
+
+Add summer pockets
+
+Proper hooks for alice even with frida presence
+
+Taishou x Alice hooks
+---
+ docs/eden-puni.code-workspace                |  18 +
+ src/android/app/build.gradle.kts             |   7 +
+ src/android/app/src/main/AndroidManifest.xml |   3 +-
+ src/android/gradle.properties                |   3 +-
+ src/core/CMakeLists.txt                      |   2 +
+ src/core/arm/nce/arm_nce.cpp                 |  54 ++
+ src/core/arm/nce/arm_nce.h                   |   4 +
+ src/core/arm/nce/arm_nce.s                   |  52 ++
+ src/core/arm/nce/arm_nce_asm_definitions.h   |   1 +
+ src/core/arm/nce/interpreter_visitor.cpp     | 139 ++++-
+ src/core/arm/nce/interpreter_visitor.h       |  24 +-
+ src/core/arm/nce/nce_hooks.cpp               | 556 +++++++++++++++++++
+ src/core/arm/nce/nce_hooks.h                 | 105 ++++
+ 13 files changed, 962 insertions(+), 6 deletions(-)
+ create mode 100644 docs/eden-puni.code-workspace
+ create mode 100644 src/core/arm/nce/nce_hooks.cpp
+ create mode 100644 src/core/arm/nce/nce_hooks.h
+
+diff --git a/docs/eden-puni.code-workspace b/docs/eden-puni.code-workspace
+new file mode 100644
+index 0000000000..0096a20e73
+--- /dev/null
++++ b/docs/eden-puni.code-workspace
+@@ -0,0 +1,18 @@
++{
++  "folders": [
++	{
++		"name": "scripts",
++		"path": "../../../../Software/Agent/data/scripts"
++	},
++	{
++		"path": ".."
++	},
++	{
++		"path": "../../frida-gum"
++	}
++],
++  "settings": {
++    "editor.tabSize": 2,
++    "editor.detectIndentation": true
++  }
++}
+diff --git a/src/android/app/build.gradle.kts b/src/android/app/build.gradle.kts
+index 61e817e546..1b4c042705 100644
+--- a/src/android/app/build.gradle.kts
++++ b/src/android/app/build.gradle.kts
+@@ -53,6 +53,9 @@ android {
+     packaging {
+         // This is necessary for libadrenotools custom driver loading
+         jniLibs.useLegacyPackaging = true
++
++        // TODO: Needs to be compiled with 16kb page alignment
++        jniLibs.keepDebugSymbols.add("**/libfrida-gadget.config.so")
+     }
+ 
+     androidResources {
+@@ -71,6 +74,9 @@ android {
+                 val extraCMakeArgs =
+                     (project.findProperty("YUZU_ANDROID_ARGS") as String?)?.split("\\s+".toRegex())
+                         ?: emptyList()
++
++                val jniLibsPath = projectDir.resolve("src/main/jniLibs/arm64-v8a").absolutePath
++
+                 arguments.addAll(
+                     listOf(
+                         "-DENABLE_QT=0", // Don't use QT
+@@ -85,6 +91,7 @@ android {
+                         "-DBUILD_TESTING=OFF",
+                         "-DYUZU_TESTS=OFF",
+                         "-DDYNARMIC_TESTS=OFF",
++                        "-DCMAKE_SHARED_LINKER_FLAGS=-L${jniLibsPath} -Wl,--no-as-needed -lfrida-gadget-raw",
+                         *extraCMakeArgs.toTypedArray()
+                     )
+                 )
+diff --git a/src/android/app/src/main/AndroidManifest.xml b/src/android/app/src/main/AndroidManifest.xml
+index 13007f10e4..3ab353b7b9 100644
+--- a/src/android/app/src/main/AndroidManifest.xml
++++ b/src/android/app/src/main/AndroidManifest.xml
+@@ -47,7 +47,8 @@ SPDX-License-Identifier: GPL-3.0-or-later
+         android:fullBackupContent="@xml/data_extraction_rules"
+         android:dataExtractionRules="@xml/data_extraction_rules_api_31"
+         tools:targetApi="33"
+-        android:enableOnBackInvokedCallback="true">
++        android:enableOnBackInvokedCallback="true"
++        android:extractNativeLibs="true">
+ 
+         <meta-data android:name="com.samsung.android.gamehub" android:value="true" />
+         <meta-data android:name="com.xiaomi.gamecenter.sdk.service.enabled" android:value="true" />
+diff --git a/src/android/gradle.properties b/src/android/gradle.properties
+index 151f7378d6..13ba3bca33 100644
+--- a/src/android/gradle.properties
++++ b/src/android/gradle.properties
+@@ -18,4 +18,5 @@ android.defaults.buildfeatures.buildconfig=true
+ 
+ # Android Gradle plugin 8.0.2
+ android.suppressUnsupportedCompileSdk=34
+-android.native.buildOutput=verbose
+\ No newline at end of file
++android.native.buildOutput=verbose
++YUZU_ANDROID_ARGS=-DUSE_CCACHE=true
+\ No newline at end of file
+diff --git a/src/core/CMakeLists.txt b/src/core/CMakeLists.txt
+index a961eff8bf..6f39ed0fa5 100644
+--- a/src/core/CMakeLists.txt
++++ b/src/core/CMakeLists.txt
+@@ -1228,6 +1228,8 @@ if (HAS_NCE)
+         arm/nce/instructions.h
+         arm/nce/interpreter_visitor.cpp
+         arm/nce/interpreter_visitor.h
++        arm/nce/nce_hooks.cpp
++        arm/nce/nce_hooks.h
+         arm/nce/patcher.cpp
+         arm/nce/patcher.h
+         arm/nce/visitor_base.h
+diff --git a/src/core/arm/nce/arm_nce.cpp b/src/core/arm/nce/arm_nce.cpp
+index cc1e016ba1..1394b6f370 100644
+--- a/src/core/arm/nce/arm_nce.cpp
++++ b/src/core/arm/nce/arm_nce.cpp
+@@ -10,6 +10,7 @@
+ #include "common/signal_chain.h"
+ #include "core/arm/nce/arm_nce.h"
+ #include "core/arm/nce/interpreter_visitor.h"
++#include "core/arm/nce/nce_hooks.h"
+ #include "core/arm/nce/patcher.h"
+ #include "core/core.h"
+ #include "core/memory.h"
+@@ -26,6 +27,7 @@ namespace {
+ 
+ struct sigaction g_orig_bus_action;
+ struct sigaction g_orig_segv_action;
++struct sigaction g_orig_ill_action;
+ 
+ // Verify assembly offsets.
+ using NativeExecutionParameters = Kernel::KThread::NativeExecutionParameters;
+@@ -181,6 +183,49 @@ void ArmNce::HandleHostAccessFault(int sig, void* raw_info, void* raw_context) {
+     return g_orig_segv_action.sa_sigaction(sig, static_cast<siginfo_t*>(raw_info), raw_context);
+ }
+ 
++bool ArmNce::HandleGuestIllegalInstruction(GuestContext* guest_ctx, void* raw_info,
++                                           void* raw_context) {
++    // Validate guest_ctx before accessing
++    if (!guest_ctx || !guest_ctx->system) {
++        return false;
++    }
++
++    auto* info = static_cast<siginfo_t*>(raw_info);
++
++    // si_code > 0 means the signal was generated by the CPU (actual illegal instruction)
++    // si_code <= 0 means it was sent programmatically (kill, tkill, sigqueue, etc.)
++    // We only handle CPU-generated SIGILLs for our hooks
++    if (info->si_code <= 0) {
++        return false;
++    }
++
++    auto& host_ctx = static_cast<ucontext_t*>(raw_context)->uc_mcontext;
++    const u64 pc = host_ctx.pc;
++
++    // Delegate to NceHooks for hook handling
++    // This handles the lock-free hook lookup, callback execution, and trampoline dispatch
++    if (NceHooks::HandleHookIfInstalled(guest_ctx, pc, raw_info, raw_context)) {
++        return true;
++    }
++
++    // No hook at this address - this is an actual illegal instruction
++    // Let Frida or other handlers process it
++    return false;
++}
++
++void ArmNce::HandleHostIllegalInstruction(int sig, void* raw_info, void* raw_context) {
++    auto* info = static_cast<siginfo_t*>(raw_info);
++    LOG_ERROR(Core_ARM, "Host SIGILL received at address {:p}", info->si_addr);
++
++    if (g_orig_ill_action.sa_sigaction) {
++        LOG_DEBUG(Core_ARM, "Chaining to original SIGILL handler");
++        return g_orig_ill_action.sa_sigaction(sig, info, raw_context);
++    }
++
++    LOG_CRITICAL(Core_ARM, "No original SIGILL handler, aborting");
++    std::abort();
++}
++
+ void ArmNce::LockThread(Kernel::KThread* thread) {
+     auto* thread_params = &thread->GetNativeExecutionParameters();
+     LockThreadParameters(thread_params);
+@@ -301,6 +346,7 @@ void ArmNce::Initialize() {
+         sigaddset(&signal_mask, BreakFromRunCodeSignal);
+         sigaddset(&signal_mask, GuestAlignmentFaultSignal);
+         sigaddset(&signal_mask, GuestAccessFaultSignal);
++        sigaddset(&signal_mask, GuestIllegalInstructionSignal);
+ 
+         struct sigaction return_to_run_code_action {};
+         return_to_run_code_action.sa_flags = SA_SIGINFO | SA_ONSTACK;
+@@ -330,6 +376,14 @@ void ArmNce::Initialize() {
+             reinterpret_cast<HandlerType>(&ArmNce::GuestAccessFaultSignalHandler);
+         access_fault_action.sa_mask = signal_mask;
+         Common::SigAction(GuestAccessFaultSignal, &access_fault_action, &g_orig_segv_action);
++
++        struct sigaction illegal_instruction_action {};
++        illegal_instruction_action.sa_flags = SA_SIGINFO | SA_ONSTACK | SA_RESTART;
++        illegal_instruction_action.sa_sigaction =
++            reinterpret_cast<HandlerType>(&ArmNce::GuestIllegalInstructionSignalHandler);
++        illegal_instruction_action.sa_mask = signal_mask;
++        Common::SigAction(GuestIllegalInstructionSignal, &illegal_instruction_action,
++                          &g_orig_ill_action);
+     });
+ }
+ 
+diff --git a/src/core/arm/nce/arm_nce.h b/src/core/arm/nce/arm_nce.h
+index be9b304c4c..b5cd9cedf1 100644
+--- a/src/core/arm/nce/arm_nce.h
++++ b/src/core/arm/nce/arm_nce.h
+@@ -3,6 +3,7 @@
+ 
+ #pragma once
+ 
++#include <atomic>
+ #include <mutex>
+ 
+ #include "core/arm/arm_interface.h"
+@@ -63,6 +64,7 @@ private:
+     static void BreakFromRunCodeSignalHandler(int sig, void* info, void* raw_context);
+     static void GuestAlignmentFaultSignalHandler(int sig, void* info, void* raw_context);
+     static void GuestAccessFaultSignalHandler(int sig, void* info, void* raw_context);
++    static void GuestIllegalInstructionSignalHandler(int sig, void* info, void* raw_context);
+ 
+     static void LockThreadParameters(void* tpidr);
+     static void UnlockThreadParameters(void* tpidr);
+@@ -76,6 +78,8 @@ private:
+     static bool HandleGuestAccessFault(GuestContext* ctx, void* info, void* raw_context);
+     static void HandleHostAlignmentFault(int sig, void* info, void* raw_context);
+     static void HandleHostAccessFault(int sig, void* info, void* raw_context);
++    static bool HandleGuestIllegalInstruction(GuestContext* ctx, void* info, void* raw_context);
++    static void HandleHostIllegalInstruction(int sig, void* info, void* raw_context);
+ 
+ public:
+     Core::System& m_system;
+diff --git a/src/core/arm/nce/arm_nce.s b/src/core/arm/nce/arm_nce.s
+index c68c059491..9c92f0f771 100644
+--- a/src/core/arm/nce/arm_nce.s
++++ b/src/core/arm/nce/arm_nce.s
+@@ -223,6 +223,58 @@ _ZN4Core6ArmNce29GuestAccessFaultSignalHandlerEiPvS1_:
+     ret
+ 
+ 
++/* static void Core::ArmNce::GuestIllegalInstructionSignalHandler(int sig, void* info, void* raw_context) */
++.section    .text._ZN4Core6ArmNce36GuestIllegalInstructionSignalHandlerEiPvS1_, "ax", %progbits
++.global     _ZN4Core6ArmNce36GuestIllegalInstructionSignalHandlerEiPvS1_
++.type       _ZN4Core6ArmNce36GuestIllegalInstructionSignalHandlerEiPvS1_, %function
++_ZN4Core6ArmNce36GuestIllegalInstructionSignalHandlerEiPvS1_:
++    /* Check to see if we have the correct TLS magic. */
++    mrs     x8, tpidr_el0
++    ldr     w9, [x8, #(TpidrEl0TlsMagic)]
++
++    LOAD_IMMEDIATE_32(w10, TlsMagic)
++
++    cmp     w9, w10
++    b.ne    3f
++
++    /* Check if native_context is null. */
++    ldr     x9, [x8, #(TpidrEl0NativeContext)]
++    cbz     x9, 3f
++
++1:
++    /* Correct TLS magic and valid native_context, so this is a guest illegal instruction (likely our hook). */
++    stp     x29, x30, [sp, #-0x20]!
++    str     x19, [sp, #0x10]
++    mov     x29, sp
++
++    /* Save the old tpidr_el0. */
++    mov     x19, x8
++
++    /* Restore host tpidr_el0. */
++    ldr     x0, [x8, #(TpidrEl0NativeContext)]
++    ldr     x3, [x0, #(GuestContextHostContext + HostContextTpidrEl0)]
++    msr     tpidr_el0, x3
++
++    /* Call the handler. */
++    bl       _ZN4Core6ArmNce29HandleGuestIllegalInstructionEPNS_12GuestContextEPvS3_
++
++    /* If the handler returned false, we want to preserve the host tpidr_el0. */
++    cbz     x0, 2f
++
++    /* Otherwise, restore guest tpidr_el0. */
++    msr     tpidr_el0, x19
++
++2:
++    ldr     x19, [sp, #0x10]
++    ldp     x29, x30, [sp], #0x20
++    ret
++
++3:
++    /* Incorrect TLS magic or null native_context, so this is a host fault. */
++    /* Tail call the handler. */
++    b       _ZN4Core6ArmNce28HandleHostIllegalInstructionEiPvS1_
++
++
+ /* static void Core::ArmNce::LockThreadParameters(void* tpidr) */
+ .section    .text._ZN4Core6ArmNce20LockThreadParametersEPv, "ax", %progbits
+ .global     _ZN4Core6ArmNce20LockThreadParametersEPv
+diff --git a/src/core/arm/nce/arm_nce_asm_definitions.h b/src/core/arm/nce/arm_nce_asm_definitions.h
+index 8ea4383f73..f2c5720008 100644
+--- a/src/core/arm/nce/arm_nce_asm_definitions.h
++++ b/src/core/arm/nce/arm_nce_asm_definitions.h
+@@ -12,6 +12,7 @@
+ #define BreakFromRunCodeSignal SIGURG
+ #define GuestAccessFaultSignal SIGSEGV
+ #define GuestAlignmentFaultSignal SIGBUS
++#define GuestIllegalInstructionSignal SIGILL
+ 
+ #define GuestContextSp 0xF8
+ #define GuestContextHostContext 0x320
+diff --git a/src/core/arm/nce/interpreter_visitor.cpp b/src/core/arm/nce/interpreter_visitor.cpp
+index 78b78f8067..e6393a80e1 100644
+--- a/src/core/arm/nce/interpreter_visitor.cpp
++++ b/src/core/arm/nce/interpreter_visitor.cpp
+@@ -767,8 +767,9 @@ std::optional<u64> MatchAndExecuteOneInstruction(Core::Memory::Memory& memory, m
+     std::span<u128, 32> vregs(reinterpret_cast<u128*>(fpsimd_context->vregs), 32);
+     u64& sp = *reinterpret_cast<u64*>(&context->sp);
+     const u64& pc = *reinterpret_cast<u64*>(&context->pc);
++    u64 pstate = static_cast<u64>(context->pstate);
+ 
+-    InterpreterVisitor visitor(memory, regs, vregs, sp, pc);
++    InterpreterVisitor visitor(memory, regs, vregs, sp, pc, &pstate);
+     u32 instruction = memory.Read32(pc);
+     bool was_executed = false;
+ 
+@@ -778,7 +779,141 @@ std::optional<u64> MatchAndExecuteOneInstruction(Core::Memory::Memory& memory, m
+         LOG_ERROR(Core_ARM, "Unallocated encoding: {:#x}", instruction);
+     }
+ 
+-    return was_executed ? std::optional<u64>(pc + 4) : std::nullopt;
++    if (!was_executed) {
++        return std::nullopt;
++    }
++
++    // Return branch target if set, otherwise PC + 4
++    return visitor.GetNextPc().value_or(pc + 4);
++}
++
++// === NCE Hooks Extensions: PC-relative instructions ===
++
++bool InterpreterVisitor::ADR(Imm<2> immlo, Imm<19> immhi, Reg Rd) {
++    const s64 imm = Dynarmic::concatenate(immhi, immlo).SignExtend<s64>();
++    this->SetReg(Rd, this->GetPc() + imm);
++    return true;
++}
++
++bool InterpreterVisitor::ADRP(Imm<2> immlo, Imm<19> immhi, Reg Rd) {
++    const s64 imm = Dynarmic::concatenate(immhi, immlo).SignExtend<s64>() << 12;
++    const u64 base = this->GetPc() & ~0xFFFULL;
++    this->SetReg(Rd, base + imm);
++    return true;
++}
++
++bool InterpreterVisitor::B_uncond(Imm<26> imm26) {
++    const s64 offset = Dynarmic::concatenate(imm26, Imm<2>{0}).SignExtend<s64>();
++    m_next_pc = this->GetPc() + offset;
++    return true;
++}
++
++bool InterpreterVisitor::BL(Imm<26> imm26) {
++    const s64 offset = Dynarmic::concatenate(imm26, Imm<2>{0}).SignExtend<s64>();
++    this->SetReg(Reg::R30, this->GetPc() + 4);  // LR = return address
++    m_next_pc = this->GetPc() + offset;
++    return true;
++}
++
++bool InterpreterVisitor::B_cond(Imm<19> imm19, Cond cond) {
++    if (!m_pstate) {
++        // No pstate available, cannot evaluate condition
++        return false;
++    }
++
++    const u64 pstate = *m_pstate;
++    const bool n = (pstate >> 31) & 1;
++    const bool z = (pstate >> 30) & 1;
++    const bool c = (pstate >> 29) & 1;
++    const bool v = (pstate >> 28) & 1;
++
++    bool take_branch;
++    switch (cond) {
++        case Cond::EQ: take_branch = z; break;
++        case Cond::NE: take_branch = !z; break;
++        case Cond::CS: take_branch = c; break;
++        case Cond::CC: take_branch = !c; break;
++        case Cond::MI: take_branch = n; break;
++        case Cond::PL: take_branch = !n; break;
++        case Cond::VS: take_branch = v; break;
++        case Cond::VC: take_branch = !v; break;
++        case Cond::HI: take_branch = c && !z; break;
++        case Cond::LS: take_branch = !c || z; break;
++        case Cond::GE: take_branch = n == v; break;
++        case Cond::LT: take_branch = n != v; break;
++        case Cond::GT: take_branch = !z && (n == v); break;
++        case Cond::LE: take_branch = z || (n != v); break;
++        case Cond::AL: take_branch = true; break;
++        case Cond::NV: take_branch = true; break;  // Always in this context
++        default: return false;
++    }
++
++    if (take_branch) {
++        const s64 offset = Dynarmic::concatenate(imm19, Imm<2>{0}).SignExtend<s64>();
++        m_next_pc = this->GetPc() + offset;
++    }
++    return true;
++}
++
++bool InterpreterVisitor::CBZ(bool sf, Imm<19> imm19, Reg Rt) {
++    u64 val = this->GetReg(Rt);
++    if (!sf) val &= 0xFFFFFFFF;
++
++    if (val == 0) {
++        const s64 offset = Dynarmic::concatenate(imm19, Imm<2>{0}).SignExtend<s64>();
++        m_next_pc = this->GetPc() + offset;
++    }
++    return true;
++}
++
++bool InterpreterVisitor::CBNZ(bool sf, Imm<19> imm19, Reg Rt) {
++    u64 val = this->GetReg(Rt);
++    if (!sf) val &= 0xFFFFFFFF;
++
++    if (val != 0) {
++        const s64 offset = Dynarmic::concatenate(imm19, Imm<2>{0}).SignExtend<s64>();
++        m_next_pc = this->GetPc() + offset;
++    }
++    return true;
++}
++
++bool InterpreterVisitor::TBZ(Imm<1> b5, Imm<5> b40, Imm<14> imm14, Reg Rt) {
++    const u32 bit_pos = Dynarmic::concatenate(b5, b40).ZeroExtend<u32>();
++    const u64 val = this->GetReg(Rt);
++
++    if (((val >> bit_pos) & 1) == 0) {
++        const s64 offset = Dynarmic::concatenate(imm14, Imm<2>{0}).SignExtend<s64>();
++        m_next_pc = this->GetPc() + offset;
++    }
++    return true;
++}
++
++bool InterpreterVisitor::TBNZ(Imm<1> b5, Imm<5> b40, Imm<14> imm14, Reg Rt) {
++    const u32 bit_pos = Dynarmic::concatenate(b5, b40).ZeroExtend<u32>();
++    const u64 val = this->GetReg(Rt);
++
++    if (((val >> bit_pos) & 1) != 0) {
++        const s64 offset = Dynarmic::concatenate(imm14, Imm<2>{0}).SignExtend<s64>();
++        m_next_pc = this->GetPc() + offset;
++    }
++    return true;
++}
++
++bool InterpreterVisitor::LDRSW_lit(Imm<19> imm19, Reg Rt) {
++    const s64 offset = Dynarmic::concatenate(imm19, Imm<2>{0}).SignExtend<s64>();
++    const u64 address = this->GetPc() + offset;
++
++    s32 data = 0;
++    m_memory.ReadBlock(address, &data, 4);
++    this->SetReg(Rt, static_cast<s64>(data));  // Sign-extend to 64-bit
++    return true;
++}
++
++bool InterpreterVisitor::PRFM_lit(Imm<19> imm19, Imm<5> prfop) {
++    // Prefetch hint - no-op in emulation
++    (void)imm19;
++    (void)prfop;
++    return true;
+ }
+ 
+ } // namespace Core
+diff --git a/src/core/arm/nce/interpreter_visitor.h b/src/core/arm/nce/interpreter_visitor.h
+index daae204310..b798d235b8 100644
+--- a/src/core/arm/nce/interpreter_visitor.h
++++ b/src/core/arm/nce/interpreter_visitor.h
+@@ -26,10 +26,15 @@ class Memory;
+ class InterpreterVisitor final : public VisitorBase {
+ public:
+     explicit InterpreterVisitor(Core::Memory::Memory& memory, std::span<u64, 31> regs,
+-                                std::span<u128, 32> fpsimd_regs, u64& sp, const u64& pc)
+-        : m_memory(memory), m_regs(regs), m_fpsimd_regs(fpsimd_regs), m_sp(sp), m_pc(pc) {}
++                                std::span<u128, 32> fpsimd_regs, u64& sp, const u64& pc,
++                                u64* pstate = nullptr)
++        : m_memory(memory), m_regs(regs), m_fpsimd_regs(fpsimd_regs), m_sp(sp), m_pc(pc),
++          m_pstate(pstate) {}
+     ~InterpreterVisitor() override = default;
+ 
++    // Get computed next PC (for branch instructions that change control flow)
++    std::optional<u64> GetNextPc() const { return m_next_pc; }
++
+     enum class MemOp {
+         Load,
+         Store,
+@@ -97,12 +102,27 @@ public:
+     bool LDR_reg_fpsimd(Imm<2> size, Imm<1> opc_1, Reg Rm, Imm<3> option, bool S, Reg Rn,
+                         Vec Vt) override;
+ 
++    // === NCE Hooks Extensions: PC-relative instructions ===
++    bool ADR(Imm<2> immlo, Imm<19> immhi, Reg Rd) override;
++    bool ADRP(Imm<2> immlo, Imm<19> immhi, Reg Rd) override;
++    bool B_uncond(Imm<26> imm26) override;
++    bool BL(Imm<26> imm26) override;
++    bool B_cond(Imm<19> imm19, Cond cond) override;
++    bool CBZ(bool sf, Imm<19> imm19, Reg Rt) override;
++    bool CBNZ(bool sf, Imm<19> imm19, Reg Rt) override;
++    bool TBZ(Imm<1> b5, Imm<5> b40, Imm<14> imm14, Reg Rt) override;
++    bool TBNZ(Imm<1> b5, Imm<5> b40, Imm<14> imm14, Reg Rt) override;
++    bool LDRSW_lit(Imm<19> imm19, Reg Rt) override;
++    bool PRFM_lit(Imm<19> imm19, Imm<5> prfop) override;
++
+ private:
+     Core::Memory::Memory& m_memory;
+     std::span<u64, 31> m_regs;
+     std::span<u128, 32> m_fpsimd_regs;
+     u64& m_sp;
+     const u64& m_pc;
++    u64* m_pstate;                     // Condition flags (optional, for branch emulation)
++    std::optional<u64> m_next_pc;      // Branch target (set by branch instructions)
+ };
+ 
+ std::optional<u64> MatchAndExecuteOneInstruction(Core::Memory::Memory& memory, mcontext_t* context,
+diff --git a/src/core/arm/nce/nce_hooks.cpp b/src/core/arm/nce/nce_hooks.cpp
+new file mode 100644
+index 0000000000..4affeea5bb
+--- /dev/null
++++ b/src/core/arm/nce/nce_hooks.cpp
+@@ -0,0 +1,556 @@
++// SPDX-FileCopyrightText: Copyright 2025 Eden Emulator Project
++// SPDX-License-Identifier: GPL-3.0-or-later
++
++#include "common/logging/log.h"
++#include "common/settings.h"
++#include "core/arm/nce/guest_context.h"
++#include "core/arm/nce/interpreter_visitor.h"
++#include "core/arm/nce/nce_hooks.h"
++#include "core/core.h"
++#include "core/memory.h"
++
++#include <algorithm>
++#include <atomic>
++#include <cstdio>
++#include <cstring>
++#include <mutex>
++#include <optional>
++#include <vector>
++#include <signal.h>
++#include <sys/mman.h>
++#include <ucontext.h>
++
++// Atomic callback pointer for thread-safe log callback registration
++static std::atomic<NceLogCallback> s_log_callback{nullptr};
++
++// Internal logging function - calls registered callback if present (for Frida integration)
++static void NceLog(int level, const char* message) {
++    auto cb = s_log_callback.load(std::memory_order_acquire);
++    if (cb) {
++        cb(level, message);
++    }
++}
++
++// Helper function that logs to both Frida (via NceLog callback) and logcat (via LOG_*)
++static void NceLogImpl(int level, const char* message) {
++    NceLog(level, message);
++    switch (level) {
++    case NCE_LOG_DEBUG:
++        LOG_DEBUG(Core_ARM, "{}", message);
++        break;
++    case NCE_LOG_INFO:
++        LOG_INFO(Core_ARM, "{}", message);
++        break;
++    case NCE_LOG_WARNING:
++        LOG_WARNING(Core_ARM, "{}", message);
++        break;
++    case NCE_LOG_ERROR:
++        LOG_ERROR(Core_ARM, "{}", message);
++        break;
++    }
++}
++
++// Logging macros that output to both Frida (via callback) and logcat
++#define NCE_LOG(level, fmt, ...) do { \
++    char _nce_buf[512]; \
++    snprintf(_nce_buf, sizeof(_nce_buf), fmt, ##__VA_ARGS__); \
++    NceLogImpl(level, _nce_buf); \
++} while(0)
++
++#define NCE_LOG_DEBUG(fmt, ...)   NCE_LOG(NCE_LOG_DEBUG, fmt, ##__VA_ARGS__)
++#define NCE_LOG_INFO(fmt, ...)    NCE_LOG(NCE_LOG_INFO, fmt, ##__VA_ARGS__)
++#define NCE_LOG_WARNING(fmt, ...) NCE_LOG(NCE_LOG_WARNING, fmt, ##__VA_ARGS__)
++#define NCE_LOG_ERROR(fmt, ...)   NCE_LOG(NCE_LOG_ERROR, fmt, ##__VA_ARGS__)
++
++namespace Core::NceHooks {
++
++// Hook Storage (moved from arm_nce.h/cpp)
++
++// Hook callback signature - using raw function pointer for signal safety
++using HookCallback = void (*)(GuestContext*);
++
++// Lock-free hook storage for signal safety
++// Using a fixed-size array to avoid any heap allocation or locking in signal handler
++static constexpr size_t MaxHooks = 64;
++
++struct HookEntry {
++    u64 address; // Host address where hook is installed (0 = unused slot)
++    u32 original_instruction;
++    HookCallback callback;
++};
++
++static HookEntry s_hooks[MaxHooks]{};
++static std::atomic<size_t> s_hook_count{0};
++
++// Mutex only used during install/remove (not in signal handler)
++static std::mutex s_hooks_install_mutex;
++
++// Thread-local context for NceGetCurrentContext()
++static thread_local GuestContext* s_current_context = nullptr;
++
++// Native Execution Trampoline System
++// Instead of emulating instructions, we execute them natively in a trampoline
++// buffer. This supports all ARM64 instructions except PC-relative ones, which
++// are handled via emulation.
++
++constexpr size_t MaxTrampolines = 256;
++constexpr size_t TrampolinePageSize = 4096;
++
++// Each trampoline contains:
++// - The original instruction (4 bytes)
++// - LDR X16, #8 (4 bytes) - load return address
++// - BR X16 (4 bytes) - branch to return address
++// - Padding (4 bytes)
++// - 64-bit return address (8 bytes)
++// Total: 24 bytes per trampoline
++struct alignas(8) TrampolineBlock {
++    u32 original_instruction; // The instruction we moved here
++    u32 ldr_x16;              // LDR X16, #8
++    u32 br_x16;               // BR X16
++    u32 padding;              // Alignment padding
++    u64 return_address;       // Address to jump back to (hook_addr + 4)
++};
++static_assert(sizeof(TrampolineBlock) == 24, "TrampolineBlock must be 24 bytes");
++
++// Signal-safe trampoline lookup table (no locks needed for reads)
++struct TrampolineEntry {
++    u64 address;            // Host address where hook is installed
++    u64 trampoline_address; // Address of the trampoline code
++};
++
++static TrampolineEntry s_trampolines[MaxTrampolines];
++static std::atomic<size_t> s_trampoline_count{0};
++
++// Executable memory pages for trampolines
++static std::vector<void*> s_trampoline_pages;
++static u8* s_current_page = nullptr;
++static size_t s_page_offset = 0;
++static std::mutex s_trampoline_mutex;
++
++// Check if instruction uses PC-relative addressing
++static bool IsPcRelative(u32 inst) {
++    // B / BL (Unconditional branch immediate)
++    // B:  0001 01xx xxxx xxxx xxxx xxxx xxxx xxxx (0x14000000)
++    // BL: 1001 01xx xxxx xxxx xxxx xxxx xxxx xxxx (0x94000000)
++    if ((inst & 0x7C000000) == 0x14000000)
++        return true;
++
++    // B.cond (Conditional branch immediate)
++    // 0101 0100 xxxx xxxx xxxx xxxx xxx0 xxxx (0x54000000)
++    if ((inst & 0xFF000010) == 0x54000000)
++        return true;
++
++    // CBZ / CBNZ (Compare and branch)
++    // x011 010x xxxx xxxx xxxx xxxx xxxx xxxx (0x34000000 / 0x35000000)
++    if ((inst & 0x7E000000) == 0x34000000)
++        return true;
++
++    // TBZ / TBNZ (Test and branch)
++    // x011 011x xxxx xxxx xxxx xxxx xxxx xxxx (0x36000000 / 0x37000000)
++    if ((inst & 0x7E000000) == 0x36000000)
++        return true;
++
++    // ADR / ADRP (PC-relative address)
++    // ADR:  0xx1 0000 xxxx xxxx xxxx xxxx xxxx xxxx (0x10000000)
++    // ADRP: 1xx1 0000 xxxx xxxx xxxx xxxx xxxx xxxx (0x90000000)
++    if ((inst & 0x1F000000) == 0x10000000)
++        return true;
++
++    // LDR (Literal) - loads from PC-relative address
++    // xx01 1x00 xxxx xxxx xxxx xxxx xxxx xxxx (0x18000000)
++    if ((inst & 0x3B000000) == 0x18000000)
++        return true;
++
++    // PRFM (Literal) - prefetch from PC-relative address
++    // 1101 1000 xxxx xxxx xxxx xxxx xxxx xxxx (0xD8000000)
++    if ((inst & 0xFF000000) == 0xD8000000)
++        return true;
++
++    return false;
++}
++
++// Allocate a trampoline for the given instruction
++static u64 AllocateTrampoline(u32 instruction, u64 return_address) {
++    // Check if we have room
++    if (s_trampoline_count.load(std::memory_order_acquire) >= MaxTrampolines) {
++        LOG_ERROR(Core_ARM, "Trampoline table full");
++        return 0;
++    }
++
++    // Allocate a new page if needed
++    if (!s_current_page || s_page_offset + sizeof(TrampolineBlock) > TrampolinePageSize) {
++        void* page = mmap(nullptr, TrampolinePageSize, PROT_READ | PROT_WRITE | PROT_EXEC,
++                          MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
++        if (page == MAP_FAILED) {
++            LOG_ERROR(Core_ARM, "Failed to allocate trampoline page: {}", strerror(errno));
++            return 0;
++        }
++        s_trampoline_pages.push_back(page);
++        s_current_page = static_cast<u8*>(page);
++        s_page_offset = 0;
++        LOG_DEBUG(Core_ARM, "Allocated trampoline page at {:p}", page);
++    }
++
++    // Get pointer to the trampoline block
++    TrampolineBlock* block = reinterpret_cast<TrampolineBlock*>(s_current_page + s_page_offset);
++    u64 trampoline_addr = reinterpret_cast<u64>(block);
++    s_page_offset += sizeof(TrampolineBlock);
++
++    // Write the trampoline code:
++    // 1. Original instruction
++    block->original_instruction = instruction;
++
++    // 2. LDR X16, #12 (load address from 12 bytes ahead)
++    //    At offset 4, PC+12 = offset 16, which is where return_address is stored
++    // Encoding: 0101 1000 0000 0000 0000 0000 0111 0000 = 0x58000070
++    block->ldr_x16 = 0x58000070;
++
++    // 3. BR X16 (branch to address in X16)
++    // Encoding: 1101 0110 0001 1111 0000 0010 0000 0000 = 0xD61F0200
++    block->br_x16 = 0xD61F0200;
++
++    // 4. Padding
++    block->padding = 0;
++
++    // 5. Return address (hook_addr + 4)
++    block->return_address = return_address;
++
++    // Flush instruction cache for the trampoline
++    __builtin___clear_cache(reinterpret_cast<char*>(block),
++                            reinterpret_cast<char*>(block) + sizeof(TrampolineBlock));
++
++    LOG_DEBUG(Core_ARM, "Created trampoline at {:016X} for instruction {:08X}, returns to {:016X}",
++              trampoline_addr, instruction, return_address);
++
++    return trampoline_addr;
++}
++
++// Register a trampoline in the lookup table (must hold s_mutex)
++static bool RegisterTrampoline(u64 address, u64 trampoline_address) {
++    size_t count = s_trampoline_count.load(std::memory_order_acquire);
++    if (count >= MaxTrampolines) {
++        return false;
++    }
++
++    // Store with release semantics so other threads see the complete entry
++    s_trampolines[count].address = address;
++    s_trampolines[count].trampoline_address = trampoline_address;
++    s_trampoline_count.store(count + 1, std::memory_order_release);
++
++    return true;
++}
++
++// Unregister a trampoline (must hold s_hooks_install_mutex)
++static void UnregisterTrampoline(u64 address) {
++    size_t count = s_trampoline_count.load(std::memory_order_acquire);
++
++    for (size_t i = 0; i < count; ++i) {
++        if (s_trampolines[i].address == address) {
++            // Move the last entry to fill the gap
++            if (i < count - 1) {
++                s_trampolines[i] = s_trampolines[count - 1];
++            }
++            s_trampoline_count.store(count - 1, std::memory_order_release);
++            return;
++        }
++    }
++}
++
++// Generic callback for external hooks - calls the trampoline Frida intercepts
++static void ExternalHookCallback(GuestContext* ctx) {
++    s_current_context = ctx;
++
++    // Call the trampoline that Frida will intercept
++    NceTrampoline(ctx->pc, ctx);
++
++    s_current_context = nullptr;
++}
++
++// Public API Implementation
++
++bool HandleHookIfInstalled(GuestContext* guest_ctx, u64 fault_address, void* raw_info,
++                           void* raw_context) {
++    // Signal-safe: lock-free lookup using atomic counter
++    const size_t count = s_hook_count.load(std::memory_order_acquire);
++
++    HookCallback callback = nullptr;
++    u32 original_inst = 0;
++
++    for (size_t i = 0; i < count && i < MaxHooks; ++i) {
++        const auto& entry = s_hooks[i];
++        if (entry.address == fault_address) {
++            callback = entry.callback;
++            original_inst = entry.original_instruction;
++            break;
++        }
++    }
++
++    if (!callback) {
++        // Not our hook - return false to let other handlers process it
++        return false;
++    }
++
++    // Get host context for register save/restore
++    auto& host_ctx = static_cast<ucontext_t*>(raw_context)->uc_mcontext;
++    auto* fpctx =
++        reinterpret_cast<fpsimd_context*>(reinterpret_cast<u8*>(&host_ctx) + sizeof(mcontext_t));
++
++    // Save guest state to GuestContext for the callback
++    std::memcpy(guest_ctx->cpu_registers.data(), host_ctx.regs, sizeof(host_ctx.regs));
++    std::memcpy(guest_ctx->vector_registers.data(), fpctx->vregs, sizeof(fpctx->vregs));
++    guest_ctx->fpsr = fpctx->fpsr;
++    guest_ctx->fpcr = fpctx->fpcr;
++    guest_ctx->pstate = static_cast<u32>(host_ctx.pstate);
++    guest_ctx->pc = host_ctx.pc;
++    guest_ctx->sp = host_ctx.sp;
++
++    // Execute the hook callback (no locks held)
++    callback(guest_ctx);
++
++    // Restore potentially modified state back to host context
++    std::memcpy(host_ctx.regs, guest_ctx->cpu_registers.data(), sizeof(host_ctx.regs));
++    std::memcpy(fpctx->vregs, guest_ctx->vector_registers.data(), sizeof(fpctx->vregs));
++    fpctx->fpsr = guest_ctx->fpsr;
++    fpctx->fpcr = guest_ctx->fpcr;
++    host_ctx.pstate = guest_ctx->pstate;
++    host_ctx.sp = guest_ctx->sp;
++
++    // Try to use the native execution trampoline first
++    u64 trampoline = GetTrampoline(fault_address);
++
++    if (trampoline != 0) {
++        // Redirect execution to the trampoline which will:
++        // 1. Execute the original instruction natively
++        // 2. Jump back to pc + 4
++        host_ctx.pc = trampoline;
++        guest_ctx->pc = fault_address + 4;
++        return true;
++    }
++
++    // No trampoline available - this means the instruction is PC-relative.
++    // Use the interpreter to emulate it.
++    auto& memory = guest_ctx->system->ApplicationMemory();
++
++    auto next_pc = MatchAndExecuteOneInstruction(memory, &host_ctx, fpctx);
++    if (next_pc) {
++        host_ctx.pc = *next_pc;
++        guest_ctx->pc = *next_pc;
++        return true;
++    }
++
++    // Emulation failed - log error and skip instruction
++    NCE_LOG_ERROR("Failed to emulate instruction %08X at %016llX",
++                  original_inst, (unsigned long long)fault_address);
++    host_ctx.pc = fault_address + 4;
++    guest_ctx->pc = fault_address + 4;
++    return true;
++}
++
++u64 GetTrampoline(u64 address) {
++    // Signal-safe: no locks, just atomic read
++    const size_t count = s_trampoline_count.load(std::memory_order_acquire);
++
++    for (size_t i = 0; i < count && i < MaxTrampolines; ++i) {
++        if (s_trampolines[i].address == address) {
++            return s_trampolines[i].trampoline_address;
++        }
++    }
++
++    return 0;
++}
++
++} // namespace Core::NceHooks
++
++// External C API for Frida
++
++extern "C" {
++
++bool NceInstallExternalHook(u64 address, u32 expected_instruction) {
++    // Note: 'address' is a host memory address where guest code is mapped.
++    // Callers compute this as: mod0_base + (ghidra_addr - 0x80004000)
++
++    // We need access to memory to read the original instruction and write the trap.
++    // This is a bit tricky without s_process - we'll read the instruction directly
++    // from the mapped memory since 'address' is a host address.
++
++    u32 original_instruction = 0;
++
++    // Read the original instruction directly from host memory
++    // This works because 'address' is already a host pointer
++    std::memcpy(&original_instruction, reinterpret_cast<void*>(address), sizeof(u32));
++
++    // Verify the instruction if expected_instruction is provided
++    if (expected_instruction != 0 && original_instruction != expected_instruction) {
++        NCE_LOG_WARNING("NceInstallExternalHook: Instruction mismatch at %016llX "
++                        "(expected=%08X, actual=%08X)",
++                        (unsigned long long)address, expected_instruction, original_instruction);
++        // Continue anyway - the caller may know better
++    }
++
++    // Install the hook using direct memory access
++    std::lock_guard lock(Core::NceHooks::s_hooks_install_mutex);
++
++    // Check if already hooked
++    size_t count = Core::NceHooks::s_hook_count.load(std::memory_order_relaxed);
++    for (size_t i = 0; i < count && i < Core::NceHooks::MaxHooks; ++i) {
++        if (Core::NceHooks::s_hooks[i].address == address) {
++            NCE_LOG_WARNING("Hook already installed at %016llX", (unsigned long long)address);
++            return true;
++        }
++    }
++
++    // Check capacity
++    if (count >= Core::NceHooks::MaxHooks) {
++        NCE_LOG_ERROR("Cannot install hook at %016llX: max hooks (%zu) reached",
++                      (unsigned long long)address, Core::NceHooks::MaxHooks);
++        return false;
++    }
++
++    // Create a native execution trampoline if the instruction is not PC-relative
++    if (!Core::NceHooks::IsPcRelative(original_instruction)) {
++        u64 trampoline = Core::NceHooks::AllocateTrampoline(original_instruction, address + 4);
++        if (trampoline != 0) {
++            if (!Core::NceHooks::RegisterTrampoline(address, trampoline)) {
++                NCE_LOG_WARNING("Failed to register trampoline");
++            } else {
++                NCE_LOG_INFO("Created trampoline for %08X at %016llX", original_instruction,
++                             (unsigned long long)trampoline);
++            }
++        } else {
++            NCE_LOG_WARNING("Failed to allocate trampoline for %08X (no native execution)",
++                            original_instruction);
++        }
++    } else {
++        NCE_LOG_DEBUG("Instruction %08X at %016llX is PC-relative (no trampoline needed)",
++                      original_instruction, (unsigned long long)address);
++    }
++
++    // Store the hook entry
++    Core::NceHooks::s_hooks[count].address = address;
++    Core::NceHooks::s_hooks[count].original_instruction = original_instruction;
++    Core::NceHooks::s_hooks[count].callback = Core::NceHooks::ExternalHookCallback;
++
++    std::atomic_thread_fence(std::memory_order_release);
++    Core::NceHooks::s_hook_count.store(count + 1, std::memory_order_release);
++
++    // Write the trap instruction (UDF #0 = 0x00000000) directly to host memory
++    // First, make the page writable
++    const size_t page_size = 4096;
++    void* page_start = reinterpret_cast<void*>(address & ~(page_size - 1));
++    if (mprotect(page_start, page_size, PROT_READ | PROT_WRITE | PROT_EXEC) != 0) {
++        NCE_LOG_ERROR("NceInstallExternalHook: mprotect failed at %016llX: %s",
++                      (unsigned long long)address, strerror(errno));
++        // Rollback the hook entry
++        Core::NceHooks::s_hook_count.store(count, std::memory_order_release);
++        return false;
++    }
++
++    const u32 trap_inst = 0x00000000;
++    std::memcpy(reinterpret_cast<void*>(address), &trap_inst, sizeof(u32));
++
++    // Restore memory protection to read-execute
++    mprotect(page_start, page_size, PROT_READ | PROT_EXEC);
++
++    // Invalidate instruction cache
++    __builtin___clear_cache(reinterpret_cast<char*>(address),
++                            reinterpret_cast<char*>(address + sizeof(u32)));
++
++    NCE_LOG_INFO("NceInstallExternalHook: Installed hook at %016llX", (unsigned long long)address);
++    return true;
++}
++
++bool NceRemoveExternalHook(u64 address) {
++    std::lock_guard lock(Core::NceHooks::s_hooks_install_mutex);
++
++    size_t count = Core::NceHooks::s_hook_count.load(std::memory_order_relaxed);
++    for (size_t i = 0; i < count && i < Core::NceHooks::MaxHooks; ++i) {
++        if (Core::NceHooks::s_hooks[i].address == address) {
++            // Restore the original instruction directly to host memory
++            // First, make the page writable
++            const size_t page_size = 4096;
++            void* page_start = reinterpret_cast<void*>(address & ~(page_size - 1));
++            if (mprotect(page_start, page_size, PROT_READ | PROT_WRITE | PROT_EXEC) != 0) {
++                NCE_LOG_ERROR("NceRemoveExternalHook: mprotect failed at %016llX: %s",
++                              (unsigned long long)address, strerror(errno));
++                return false;
++            }
++
++            std::memcpy(reinterpret_cast<void*>(address),
++                        &Core::NceHooks::s_hooks[i].original_instruction, sizeof(u32));
++
++            // Restore memory protection to read-execute
++            mprotect(page_start, page_size, PROT_READ | PROT_EXEC);
++
++            // Move last entry to this slot
++            if (i < count - 1) {
++                Core::NceHooks::s_hooks[i] = Core::NceHooks::s_hooks[count - 1];
++            }
++
++            Core::NceHooks::s_hooks[count - 1].address = 0;
++            Core::NceHooks::s_hooks[count - 1].callback = nullptr;
++
++            std::atomic_thread_fence(std::memory_order_release);
++            Core::NceHooks::s_hook_count.store(count - 1, std::memory_order_release);
++
++            // Remove the trampoline entry
++            Core::NceHooks::UnregisterTrampoline(address);
++
++            // Invalidate instruction cache
++            __builtin___clear_cache(reinterpret_cast<char*>(address),
++                                    reinterpret_cast<char*>(address + sizeof(u32)));
++
++            NCE_LOG_INFO("NceRemoveExternalHook: Removed hook at %016llX", (unsigned long long)address);
++            return true;
++        }
++    }
++
++    NCE_LOG_WARNING("NceRemoveExternalHook: No hook at %016llX", (unsigned long long)address);
++    return false;
++}
++
++__attribute__((noinline)) void NceTrampoline(u64 pc, void* context_ptr) {
++    // This function MUST NOT be inlined - Frida intercepts it.
++    asm volatile("" ::"r"(pc), "r"(context_ptr) : "memory");
++}
++
++void* NceGetCurrentContext() {
++    return Core::NceHooks::s_current_context;
++}
++
++void NceClearAllHooks() {
++    std::lock_guard lock(Core::NceHooks::s_hooks_install_mutex);
++    std::lock_guard tramp_lock(Core::NceHooks::s_trampoline_mutex);
++
++    const size_t page_count = Core::NceHooks::s_trampoline_pages.size();
++    const size_t hook_count = Core::NceHooks::s_hook_count.load(std::memory_order_relaxed);
++
++    // Clear hook entries (don't restore instructions - old addresses may be unmapped)
++    for (size_t i = 0; i < Core::NceHooks::MaxHooks; ++i) {
++        Core::NceHooks::s_hooks[i].address = 0;
++        Core::NceHooks::s_hooks[i].callback = nullptr;
++    }
++    Core::NceHooks::s_hook_count.store(0, std::memory_order_release);
++
++    // Clear trampoline entries
++    for (size_t i = 0; i < Core::NceHooks::MaxTrampolines; ++i) {
++        Core::NceHooks::s_trampolines[i].address = 0;
++        Core::NceHooks::s_trampolines[i].trampoline_address = 0;
++    }
++    Core::NceHooks::s_trampoline_count.store(0, std::memory_order_release);
++
++    // Free trampoline pages
++    for (void* page : Core::NceHooks::s_trampoline_pages) {
++        munmap(page, Core::NceHooks::TrampolinePageSize);
++    }
++    Core::NceHooks::s_trampoline_pages.clear();
++    Core::NceHooks::s_current_page = nullptr;
++    Core::NceHooks::s_page_offset = 0;
++
++    NCE_LOG_INFO("NceClearAllHooks: Cleared %zu hooks and freed %zu trampoline pages",
++                 hook_count, page_count);
++}
++
++void NceRegisterLogCallback(NceLogCallback callback) {
++    s_log_callback.store(callback, std::memory_order_release);
++}
++}
+diff --git a/src/core/arm/nce/nce_hooks.h b/src/core/arm/nce/nce_hooks.h
+new file mode 100644
+index 0000000000..12710ae63f
+--- /dev/null
++++ b/src/core/arm/nce/nce_hooks.h
+@@ -0,0 +1,105 @@
++// SPDX-FileCopyrightText: Copyright 2025 Eden Emulator Project
++// SPDX-License-Identifier: GPL-3.0-or-later
++
++#pragma once
++
++#include "common/common_types.h"
++
++// Export macro for Frida visibility (NCE is ARM64/Android only)
++#define NCE_EXPORT __attribute__((visibility("default")))
++
++// Export macro for functions that MUST NOT be inlined (for Frida interception)
++#define NCE_EXPORT_NOINLINE __attribute__((visibility("default"), noinline))
++
++namespace Core {
++
++struct GuestContext;
++
++namespace NceHooks {
++
++// Signal Handler Integration Point
++
++// Handle a hook if one is installed at the fault address.
++// This is the ONLY function arm_nce.cpp needs to call.
++//
++// Returns true if a hook was found and executed (caller should return from signal handler)
++// Returns false if no hook at this address (caller should continue with other handlers)
++//
++// Parameters:
++//   guest_ctx     - GuestContext* from signal handler (for register access)
++//   fault_address - host_ctx.pc (where SIGILL occurred)
++//   raw_info      - siginfo_t* for validation
++//   raw_context   - ucontext_t* for host register save/restore
++//
++// This function is signal-safe: uses lock-free lookup with atomic counter.
++bool HandleHookIfInstalled(GuestContext* guest_ctx, u64 fault_address, void* raw_info,
++                           void* raw_context);
++
++// Trampoline System (for native execution of non-PC-relative instructions)
++
++// Get the native execution trampoline address for a hooked address.
++// Returns 0 if no trampoline exists (instruction is PC-relative or allocation failed).
++// This function is signal-safe (no locks, no allocations).
++u64 GetTrampoline(u64 address);
++
++} // namespace NceHooks
++
++} // namespace Core
++
++// External C API for Frida Integration
++// These functions are exported with C linkage so Frida can find them via
++// Module.getExportByName(). They provide a stable ABI for external hook control.
++//
++// Terminology:
++// - "address" refers to host memory addresses in Eden's process space
++// - "pc" refers to the program counter (also a host address)
++// - Callers compute: host_addr = mod0_base + (ghidra_addr - 0x80004000)
++
++// Log levels for NceLog (matches Frida script expectations)
++enum NceLogLevel {
++    NCE_LOG_DEBUG = 0,
++    NCE_LOG_INFO = 1,
++    NCE_LOG_WARNING = 2,
++    NCE_LOG_ERROR = 3,
++};
++
++extern "C" {
++
++// Install an external hook at the specified address.
++// When execution reaches this address, NceTrampoline will be called.
++// The 'expected_instruction' parameter is optional (pass 0 to skip verification).
++// Returns true if the hook was installed successfully.
++NCE_EXPORT bool NceInstallExternalHook(u64 address, u32 expected_instruction);
++
++// Remove a previously installed external hook.
++// Returns true if the hook was found and removed.
++NCE_EXPORT bool NceRemoveExternalHook(u64 address);
++
++// Trampoline function called when an external hook is triggered.
++// This function does nothing by itself - Frida should intercept it.
++// Parameters:
++//   pc: The program counter where the hook was triggered (host address)
++//   context_ptr: Pointer to the GuestContext structure containing all registers
++//                (X0-X30 at offset 0, SP at offset 248, PC at offset 256)
++NCE_EXPORT_NOINLINE void NceTrampoline(u64 pc, void* context_ptr);
++
++// Get the current GuestContext pointer (for advanced usage).
++// Returns nullptr if no context is currently active.
++NCE_EXPORT void* NceGetCurrentContext();
++
++// Clear all installed hooks and free trampoline memory.
++// Call this before installing hooks for a new process (e.g., when a sub-game loads).
++// WARNING: Only call when no guest code is running - old addresses may be unmapped.
++NCE_EXPORT void NceClearAllHooks();
++
++// Callback type for log messages from Eden's NCE hooks system.
++// Parameters:
++//   level: One of NCE_LOG_DEBUG, NCE_LOG_INFO, NCE_LOG_WARNING, NCE_LOG_ERROR
++//   message: The log message (null-terminated string)
++using NceLogCallback = void (*)(int level, const char* message);
++
++// Register a callback to receive log messages from Eden.
++// This allows Eden logs to appear in the Frida app alongside Frida script logs.
++// Pass nullptr to unregister. Thread-safe.
++NCE_EXPORT void NceRegisterLogCallback(NceLogCallback callback);
++}
+-- 
+2.52.0.windows.1
+

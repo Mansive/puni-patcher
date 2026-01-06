@@ -1,0 +1,23 @@
+From 361c86dd17529238f714359ec6a5dce13bf9f86d Mon Sep 17 00:00:00 2001
+From: Mansive <33560917+Mansive@users.noreply.github.com>
+Date: Mon, 5 Jan 2026 18:56:10 -0600
+Subject: [PATCH 2/2] Ignore libfrida files
+
+---
+ .gitignore | 2 ++
+ 1 file changed, 2 insertions(+)
+
+diff --git a/.gitignore b/.gitignore
+index 0be76d85cd..2e50a5fded 100644
+--- a/.gitignore
++++ b/.gitignore
+@@ -63,3 +63,5 @@ artifacts
+ *.AppImage*
+ /install*
+ vulkansdk*.exe
++
++libfrida*
+\ No newline at end of file
+-- 
+2.52.0.windows.1
+
