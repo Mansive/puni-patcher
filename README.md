@@ -33,7 +33,7 @@ This will:
 - `patches/` - The actual `.patch` files (generated via `git format-patch`)
 - `preview.diff` - Combined diff showing all changes for ease of viewing
 - `BASE_COMMIT.txt` - The commit hash these patches apply to
-- `scripts/apply_patches.py` - (User) Script to apply patches to your eden repo
+- `scripts/apply_patches.py` - Script to apply patches to your eden repo
 - `scripts/export_patches.py` - Script to regenerate patches for Puni Patcher
 
 ## If Patches Fail to Apply
