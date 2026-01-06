@@ -5,7 +5,7 @@
 
 Patches to support NCE (Native Code Execution) hooking support to Eden on Android. While it's relatively simple to hook the Dynarmic backend, Agent's standard hooking methods will crash or freeze the emulator on the NCE backend. These patches serve to give Agent more control over Eden for stable NCE hooking.
 
-For more information, see [`NCEHooks.md`](docs\NCEHooks.md).
+For more information, see [`NCEHooks.md`](docs/NCEHooks.md).
 
 **The patches are very experimental!** Expect crashes and freezes, especially since this project was mostly accomplished through vibecoding.
 
