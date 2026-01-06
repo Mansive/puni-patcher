@@ -79,6 +79,8 @@ def generate_patches(eden_repo: Path):
     print_header(2, 5, "Generating patches (git format-patch)...")
     run_git(
         "format-patch",
+        "--no-numbered",
+        "--no-signature",
         "--start-number",
         "1",
         "-o",
