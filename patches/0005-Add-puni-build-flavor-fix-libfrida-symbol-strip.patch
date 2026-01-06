@@ -1,0 +1,40 @@
+From 58126235d8bc8f3a8e77db618a9bced7a94a00f0 Mon Sep 17 00:00:00 2001
+From: Mansive <33560917+Mansive@users.noreply.github.com>
+Date: Tue, 6 Jan 2026 00:30:10 -0600
+Subject: [PATCH] Add puni build flavor, fix libfrida symbol strip
+
+---
+ src/android/app/build.gradle.kts | 13 +++++++++++--
+ 1 file changed, 11 insertions(+), 2 deletions(-)
+
+diff --git a/src/android/app/build.gradle.kts b/src/android/app/build.gradle.kts
+index 1b4c042705..82894b0a97 100644
+--- a/src/android/app/build.gradle.kts
++++ b/src/android/app/build.gradle.kts
+@@ -54,8 +54,8 @@ android {
+         // This is necessary for libadrenotools custom driver loading
+         jniLibs.useLegacyPackaging = true
+ 
+-        // TODO: Needs to be compiled with 16kb page alignment
+-        jniLibs.keepDebugSymbols.add("**/libfrida-gadget.config.so")
++        // Prevent symbol stripping attempt on our libfrida files
++        jniLibs.keepDebugSymbols.add("**/libfrida*.config.so")
+     }
+ 
+     androidResources {
+@@ -220,6 +220,15 @@ android {
+                 }
+             }
+         }
++        create("puni") {
++            dimension = "version"
++            applicationIdSuffix = "puni"
++            resValue("string", "app_name_suffixed", "Eden Puni")
++
++            ndk {
++                abiFilters += listOf("arm64-v8a")
++            }
++        }
+     }
+ 
+     // this is really annoying but idk any other ways to fix this behavior

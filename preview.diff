@@ -10,7 +10,7 @@ index 0be76d85cd..2e50a5fded 100644
 +libfrida*
 \ No newline at end of file
 diff --git a/src/android/app/build.gradle.kts b/src/android/app/build.gradle.kts
-index 61e817e546..1b4c042705 100644
+index 61e817e546..82894b0a97 100644
 --- a/src/android/app/build.gradle.kts
 +++ b/src/android/app/build.gradle.kts
 @@ -53,6 +53,9 @@ android {
@@ -18,8 +18,8 @@ index 61e817e546..1b4c042705 100644
          // This is necessary for libadrenotools custom driver loading
          jniLibs.useLegacyPackaging = true
 +
-+        // TODO: Needs to be compiled with 16kb page alignment
-+        jniLibs.keepDebugSymbols.add("**/libfrida-gadget.config.so")
++        // Prevent symbol stripping attempt on our libfrida files
++        jniLibs.keepDebugSymbols.add("**/libfrida*.config.so")
      }
  
      androidResources {
@@ -41,6 +41,22 @@ index 61e817e546..1b4c042705 100644
                          *extraCMakeArgs.toTypedArray()
                      )
                  )
+@@ -213,6 +220,15 @@ android {
+                 }
+             }
+         }
++        create("puni") {
++            dimension = "version"
++            applicationIdSuffix = "puni"
++            resValue("string", "app_name_suffixed", "Eden Puni")
++
++            ndk {
++                abiFilters += listOf("arm64-v8a")
++            }
++        }
+     }
+ 
+     // this is really annoying but idk any other ways to fix this behavior
 diff --git a/src/core/CMakeLists.txt b/src/core/CMakeLists.txt
 index a961eff8bf..6f39ed0fa5 100644
 --- a/src/core/CMakeLists.txt
