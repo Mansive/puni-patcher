@@ -9,18 +9,15 @@ For more information, see [`NCEHooks.md`](docs/NCEHooks.md).
 
 **The patches are very experimental!** Expect crashes and freezes, especially since this project was mostly accomplished through vibecoding.
 
-## Prerequisites
+## Quick Start
 
 1. Install [Git](https://git-scm.com/install/) onto your system
 2. Obtain the Eden emulator source code
 3. Checkout the commit specified in [`BASE_COMMIT.txt`](BASE_COMMIT.txt)
 4. Run the apply script pointing to your eden directory
-
-## Quick Start
-
-```bash
-python scripts/apply_patches.py <path-to-your-eden-repo>
-```
+    ```bash
+    python scripts/apply_patches.py <path-to-your-eden-repo>
+    ```
 
 This will:
 
@@ -52,7 +49,7 @@ Then verify your repo is at the correct base commit.
 1. Build [frida-gadget](https://frida.re/docs/building/) for ARM64 with the [necessary changes](https://github.com/Mansive/puni-patcher/blob/main/docs/NCEHooks.md#frida-signal-handler-conflict)
 2. Move `frida-gadget.so` into `src\android\app\src\main\jniLibs\arm64-v8a` and rename the file to `libfrida-gadget-raw.so`
 2. Create `libfrida-gadget-raw.config.so` in the same folder with the following text:
-    ```
+    ```json
     {
       "interaction": {
         "type": "listen",
