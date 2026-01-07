@@ -1,8 +1,12 @@
+%%{init: {
+    'theme': 'forest'
+}}%%
+
 sequenceDiagram
-    autonumber
+    %% autonumber
     participant F as Frida (JS)
     participant E as Eden (C++)
-    participant G as Guest Memory
+    participant G as Game
     participant OS as OS / CPU
 
     Note over F, OS: Hook Installation Phase
@@ -30,29 +34,29 @@ sequenceDiagram
     deactivate OS
     
     activate E
-    note right of E: arm_nce.s: Signal Handler
     
     E->>E: HandleGuestIllegalInstruction()
     
-    alt Is Hook?
-        E->>E: Lookup Hook Callback
-        
-        E->>F: NceTrampoline(PC, Context)
-        activate F
-        F->>F: JS Handler (Interceptor)
-        F-->>E: Return
-        deactivate F
-        
-        Note over F, G: Resumption Phase
-        
-        alt Trampoline Available
-            E->>G: Resume at Trampoline (Native)
-        else Interpretation Required
-            E->>E: MatchAndExecuteOneInstruction()
-            E->>G: Resume at Next Instruction
-        end
-        
-    else Not a Hook
+    break SIGILL not caused by hook
         E->>OS: Forward SIGILL (Crash)
+         deactivate E
+    end
+    activate  E
+
+    E->>E: Lookup Hook Callback
+    
+    E->>F: NceTrampoline(PC, Context)
+    activate F
+    F->>F: JS Handler (Interceptor)
+    F-->>E: Return
+    deactivate F
+    
+    Note over F, OS: Resumption Phase
+    
+    alt Trampoline Available
+        E->>G: Resume at Trampoline (Native)
+    else Interpretation Required
+        E->>E: MatchAndExecuteOneInstruction()
+        E->>G: Resume at Next Instruction
     end
     deactivate E
