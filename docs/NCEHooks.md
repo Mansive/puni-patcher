@@ -86,68 +86,7 @@ Interceptor.attach(nceTrampoline, {
 
 ### How NCE Hooks Work
 
-```mermaid
-%%{init: {
-    'theme': 'forest'
-}}%%
-
-sequenceDiagram
-    %% autonumber
-    participant F as Frida (JS)
-    participant E as Eden (C++)
-    participant G as Game
-    participant OS as OS / CPU
-
-    Note over F, OS: Hook Installation Phase
-
-    F->>E: NceInstallExternalHook(addr)
-    activate E
-    E->>G: Read original instruction
-    
-    alt is PC-Relative?
-        E->>E: Mark for Interpretation
-    else is Relocatable
-        E->>E: Allocate Trampoline
-        E->>E: Write Original Inst + Branch
-    end
-
-    E->>G: Write UDF #0 (SIGILL)
-    E-->>F: Success
-    deactivate E
-
-    Note over F, OS: Hook Execution Phase
-
-    G->>OS: Execute UDF #0
-    activate OS
-    OS->>E: Signal SIGILL
-    deactivate OS
-    
-    activate E
-    
-    E->>E: HandleGuestIllegalInstruction()
-    
-    break SIGILL not caused by hook
-        E->>OS: Forward SIGILL (Crash)
-    end
-
-    E->>E: Lookup Hook Callback
-    
-    E->>F: NceTrampoline(PC, Context)
-    activate F
-    F->>F: JS Handler (Interceptor)
-    F-->>E: Return
-    deactivate F
-    
-    Note over F, OS: Resumption Phase
-    
-    alt Trampoline Available
-        E->>G: Resume at Trampoline (Native)
-    else Interpretation Required
-        E->>E: MatchAndExecuteOneInstruction()
-        E->>G: Resume at Next Instruction
-    end
-    deactivate E
-```
+![High-level Diagram](nce_hooks_diagram.svg)
 
 ### Key Data Structures
 
