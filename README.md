@@ -46,7 +46,7 @@ Then verify your repo is at the correct base commit.
 
 ## Building
 
-1. Build [frida-gadget](https://frida.re/docs/building/) for ARM64 with the [necessary changes](https://github.com/Mansive/puni-patcher/blob/main/docs/NCEHooks.md#frida-signal-handler-conflict)
+1. Build version 16.7.11 of [frida-gadget](https://frida.re/docs/building/) for ARM64 with the [necessary changes](https://github.com/Mansive/puni-patcher/blob/main/docs/NCEHooks.md#frida-signal-handler-conflict)
 2. Move `frida-gadget.so` into `eden\src\android\app\src\main\jniLibs\arm64-v8a` and rename the file to `libfrida-gadget-raw.so`
 2. Create `libfrida-gadget-raw.config.so` in the same folder with the following text:
     ```json
