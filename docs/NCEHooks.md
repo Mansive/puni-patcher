@@ -42,10 +42,11 @@ Eden exports the following functions for Frida/libYuzu.js to use:
 |----------|-----------|---------|
 | `NceInstallExternalHook` | `bool (u64 address, u32 expected_inst)` | Install a hook at address |
 | `NceRemoveExternalHook` | `bool (u64 address)` | Remove a previously installed hook |
+| `NceClearAllHooks` | `void ()` | Clear all hooks and free trampoline memory |
 | `NceTrampoline` | `void (u64 pc, void* context)` | Empty function Frida intercepts |
 | `NceGetCurrentContext` | `void* ()` | Get current GuestContext pointer |
 | `NceRegisterLogCallback` | `void (NceLogCallback callback)` | Register callback to receive Eden logs |
-| `NceClearAllHooks` | `void ()` | Clear all hooks and free trampoline memory |
+
 **Usage from libYuzu.js:**
 ```javascript
 const NceInstallExternalHook = new NativeFunction(
@@ -85,49 +86,7 @@ Interceptor.attach(nceTrampoline, {
 
 ### How NCE Hooks Work
 
-```
-┌─────────────────────────────────────────────────────────────────────────┐
-│                           HOOK INSTALLATION                             │
-├─────────────────────────────────────────────────────────────────────────┤
-│  1. Game loads, Frida/libYuzu.js attaches to process                    │
-│  2. Frida scans memory for MOD0 header to find base address             │
-│  3. Calculate hook address: base + (ghidra_offset - 0x80004000)         │
-│  4. Call NceInstallExternalHook() which (lazy init on first call):      │
-│     a. Saves original instruction                                       │
-│     b. Creates native execution trampoline (if not PC-relative)         │
-│     c. Replaces instruction with UDF #0 (0x00000000)                    │
-└─────────────────────────────────────────────────────────────────────────┘
-                                    │
-                                    ▼
-┌─────────────────────────────────────────────────────────────────────────┐
-│                           HOOK EXECUTION                                │
-├─────────────────────────────────────────────────────────────────────────┤
-│  1. Guest executes UDF #0 → CPU raises SIGILL                           │
-│  2. arm_nce.s: GuestIllegalInstructionSignalHandler catches signal      │
-│  3. arm_nce.cpp: HandleGuestIllegalInstruction() is called              │
-│  4. Look up hook callback by PC address                                 │
-│  5. Call NceTrampoline() → Frida intercepts and runs JS handler         │
-│  6. Check for native trampoline via NceHooks::GetTrampoline()           │
-│     - If found: redirect PC to trampoline (native execution)            │
-│     - If not found: emulate via MatchAndExecuteOneInstruction()         │
-│  7. Return to guest execution                                           │
-└─────────────────────────────────────────────────────────────────────────┘
-                                    │
-                                    ▼
-┌─────────────────────────────────────────────────────────────────────────┐
-│                     NATIVE EXECUTION TRAMPOLINE                         │
-├─────────────────────────────────────────────────────────────────────────┤
-│  Trampoline buffer (24 bytes, executable memory):                       │
-│  ┌──────────────────────────────────────────────────────────────────┐   │
-│  │ Offset 0:  original_instruction  (e.g., CMP W22, W8)             │   │
-│  │ Offset 4:  LDR X16, #12          (load return address)           │   │
-│  │ Offset 8:  BR X16                (jump to return address)        │   │
-│  │ Offset 12: padding               (alignment)                     │   │
-│  │ Offset 16: return_address        (hook_addr + 4, 64-bit)         │   │
-│  └──────────────────────────────────────────────────────────────────┘   │
-│  Execution: Run original instruction → Jump back to game code           │
-└─────────────────────────────────────────────────────────────────────────┘
-```
+![High-level Diagram](nce_hooks_diagram.svg)
 
 ### Key Data Structures
 
