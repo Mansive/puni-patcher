@@ -16,10 +16,10 @@
 ## Overview
 
 ### What is NCE?
-NCE (Native Code Execution) is an ARM64 execution backend for Yuzu/Eden on Android that runs game code natively on the host ARM64 processor instead of using a JIT recompiler (Dynarmic). This provides better performance but makes hooking more complex.
+NCE (Native Code Execution) is an ARM64 execution backend for Yuzu/Eden on Android that runs game code natively on the host ARM64 processor instead of using a JIT recompiler (Dynarmic). This provides better performance and boot times at the cost of making hooking more complex.
 
 ### What are NCE Hooks?
-NCE hooks allow intercepting game code at specific addresses when Eden is using the Native Code Execution CPU backend. The addresses are located simply by adding offsets to a base address. This differs from Dynarmic, whose addresses needs to be located by hooking the JIT compiler to figure out which host address corresponds with each guest address. Although it's simpler to find the target addresses with the NCE backend, there is much friction between hooks and Eden caused by the NCE developers' attempts to maximize speed at all costs.
+NCE hooks allow intercepting game code at specific addresses when Eden is using the Native Code Execution CPU backend. The addresses are located simply by adding offsets to a base address. This differs from Dynarmic, whose addresses needs to be located by hooking the JIT compiler. Although it's simpler to find the target addresses with the NCE backend, there is much friction between hooks and Eden caused by the NCE's optimizations.
 
 ### Source Files Structure
 ```
@@ -126,13 +126,10 @@ host_address = mod0_base + (ghidra_address - 0x80004000)
 
 Where:
 - `mod0_base`: Module base address found by scanning for `MOD0` magic header (in host memory)
+  - `00 00 00 00 08 00 00 00 4d 4f 44 30`
 - `ghidra_address`: Address shown in Ghidra (e.g., `0x8002ad60`) - the Switch virtual address
-- `0x80004000`: Ghidra's default base address for Switch NSO files
+- `0x80004000`: Eden's default base address for Switch NSO files which Ghidra can be set to.
 - `host_address`: The actual address in Eden's process memory (e.g., `0x18bec6bd4c`)
-
-**Terminology:**
-- **Ghidra/Guest address**: The address as seen in Ghidra/IDA (Switch virtual address space)
-- **Host address**: The address in Eden's process memory where the code actually resides
 
 The `MOD0` header is a standard structure in Switch executables that libYuzu.js scans for to reliably find the base address.
 
@@ -146,16 +143,11 @@ NCE hooks use two different execution strategies depending on the instruction ty
 
 1. **Native Execution Trampolines** (most instructions): The original instruction is copied to executable memory and run natively. This provides 100% compatibility.
 
-2. **Software Emulation** (PC-relative instructions only): Instructions that calculate addresses based on PC cannot be relocated, so they are emulated using Dynarmic's battle-tested decoder.
+2. **Software Emulation** (PC-relative instructions only): Instructions that calculate addresses based on PC cannot be relocated, so they are emulated using Dynarmic's instruction decoder.
 
 #### PC-Relative Instruction Emulation (`interpreter_visitor.cpp`)
 
-When a hook is installed on a PC-relative instruction, `MatchAndExecuteOneInstruction()` emulates it using the `InterpreterVisitor` class with Dynarmic's instruction decoder. This approach was chosen for **runtime stability** over manual bit decoding because:
-
-- Dynarmic's `Decode<>()` is battle-tested across multiple emulator projects
-- `Imm<N>::SignExtend<>()` and `concatenate()` are proven correct
-- Memory access via `Core::Memory::Memory` handles guest↔host address translation correctly
-- Returns `std::nullopt` on failure, allowing graceful fallback
+When a hook is installed on a PC-relative instruction, `MatchAndExecuteOneInstruction()` emulates it using the `InterpreterVisitor` class with Dynarmic's decoder.
 
 **Supported PC-relative instructions:**
 
@@ -239,7 +231,7 @@ bool IsPcRelative(u32 inst) {
 }
 ```
 
-These instructions are emulated via `MatchAndExecuteOneInstruction()` using the `InterpreterVisitor` class, which leverages Dynarmic's proven instruction decoder.
+These instructions are emulated via `MatchAndExecuteOneInstruction()` using the `InterpreterVisitor` class.
 
 #### Signal-Safe Trampoline Lookup
 
@@ -266,26 +258,13 @@ u64 GetTrampoline(u64 address) {
 
 ### Challenge 1: Finding the Correct Base Address
 
-**Problem:** The NSO header isn't loaded into memory, so we can't scan for `NSO0` magic.
+<!-- **Problem:** The NSO header isn't loaded into memory, so we can't scan for `NSO0` magic. -->
+**Problem:** The `code_address` property from `Svc::CreateProcessParameter` has extra padding only when NCE is used. This padding differs between each game and makes finding the base address complicated compared to Dynarmic.
 
-**Solution:** ✓ Scan for `MOD0` header instead. The `MOD0` structure is present in all Switch executables and its magic bytes can be found by scanning memory. For more information, see https://switchbrew.org/wiki/Rtld.
+**Solution:** Scan for `MOD0` header instead. The `MOD0` structure is present in all Switch executables and its magic bytes can be found by scanning memory. For more information, see the [SwitchBrew wiki](https://switchbrew.org/wiki/Rtld).
+- MOD0 Header: `00 00 00 00 08 00 00 00 4d 4f 44 30`
 
-### Challenge 2: Inline Hooks (Non-Function-Start)
-
-**Problem:** Many hooks target addresses in the middle of functions, not at function starts.
-
-**Solution:** Provide the expected instruction for verification when calling `NceInstallExternalHook()`:
-```javascript
-// Read instruction at hook address before installing
-const instruction = hookAddr.readU32();
-if (instruction !== 0x710006FF) {
-    console.log('Instruction mismatch - wrong game version or base address');
-    return;
-}
-NceInstallExternalHook(uint64(hookAddr.toString()), instruction);
-```
-
-### Challenge 3: PC-Relative Instruction Emulation
+### Challenge 2: PC-Relative Instruction Emulation
 
 **Problem:** When a hook is installed on a PC-relative instruction, we cannot use a native trampoline because the instruction calculates addresses based on its PC location. Moving it would produce wrong results.
 
@@ -293,7 +272,7 @@ NceInstallExternalHook(uint64(hookAddr.toString()), instruction);
 - `Hook at XXXX has no trampoline, instruction XXXX may not execute correctly`
 - Game logic errors (wrong branch taken, wrong address loaded)
 
-**Solution:** ✓ Implemented full PC-relative instruction emulation in `interpreter_visitor.cpp` using Dynarmic's battle-tested decoder. All common PC-relative instructions are now supported:
+**Solution:** Implemented full PC-relative instruction emulation in `interpreter_visitor.cpp` using Dynarmic's decoder. All common PC-relative instructions are now supported:
 - Address generation: `ADR`, `ADRP`
 - Unconditional branches: `B`, `BL`
 - Conditional branches: `B.cond` (with NZCV flag evaluation)
@@ -302,9 +281,7 @@ NceInstallExternalHook(uint64(hookAddr.toString()), instruction);
 - Literal loads: `LDR (literal)`, `LDRSW (literal)`, `LDR SIMD (literal)`
 - Prefetch: `PRFM (literal)` (no-op)
 
-**Design decision:** We chose to extend `InterpreterVisitor` rather than manual bit decoding for **runtime stability**. The slight increase in merge conflict potential with upstream is acceptable because Dynarmic's decoder is thoroughly tested.
-
-### Challenge 4: Flag Calculation Errors
+### Challenge 3: Flag Calculation Errors
 
 **Problem:** Instructions like `CMP` and `SUBS` set NZCV flags. If calculated incorrectly, subsequent conditional branches fail.
 
@@ -319,15 +296,15 @@ if (((op1 ^ op2) & (op1 ^ result)) & sign_bit) nzcv |= 0x10000000; // V (Overflo
 host_ctx->pstate = (host_ctx->pstate & ~0xF0000000) | nzcv;
 ```
 
-### Challenge 5: Compiler Optimizations Breaking Frida Interception
+### Challenge 4: Compiler Optimizations Breaking Frida Interception
 
 **Problem:** The `NceTrampoline` function is nearly empty, so the compiler may:
 - Inline it (no actual function call)
 - Optimize away "unused" parameters (Frida sees garbage in args)
 
 **Symptoms:**
-- Frida's `onEnter` never triggers even though logcat shows the function ran
-- `args[0]` or `args[1]` contain wrong values
+- Frida's `onEnter()` callback never triggers even though logcat shows the function ran
+- `args[0]` or `args[1]` contain garbage values
 
 **Solution:** Use compiler attributes and inline assembly:
 ```cpp
@@ -339,31 +316,13 @@ __attribute__((noinline)) void NceTrampoline(u64 pc, void* context_ptr) {
 }
 ```
 
-### Challenge 6: Trampoline Address Calculation
-
-**Problem:** The `LDR X16, #offset` instruction in trampolines must load the return address from the correct offset.
-
-**Symptoms:**
-- Game freezes after hook triggers
-- `Unmapped InvalidateNCE` errors
-- `vtable bouncing` spam
-
-**Root Cause:** ARM64's PC-relative `LDR` calculates: `address = PC + offset`. If offset is wrong, it loads garbage instead of the return address.
-
-**Solution:** Calculate offset from the instruction's position, not the start of the block:
-```cpp
-// LDR X16, #12 at offset 4 → loads from PC+12 = offset 16 (return_address)
-// Encoding: 0x58000070
-block->ldr_x16 = 0x58000070;
-```
-
-### Challenge 7: Frida Interception Doesn't Work Inside NativeFunction Calls
+### Challenge 5: Frida Interception Doesn't Work Inside NativeFunction Calls
 
 **Problem:** `Interceptor.attach` and `Interceptor.replace` do not fire for functions called from within a `NativeFunction` call context.
 
 **Symptoms:**
-- `NceLog` calls from `NceTrampoline` (signal handler) appear in Frida ✓
-- `NceLog` calls from `NceInstallExternalHook` (called via `NativeFunction`) do NOT appear ✗
+- `NceLog` calls from `NceTrampoline` (signal handler) appear in Frida, but...
+- `NceLog` calls from `NceInstallExternalHook` (called via `NativeFunction`) do NOT appear
 
 **Root Cause:** When JavaScript calls a native function via Frida's `NativeFunction`, Frida's internal trampolines conflict with interception of functions called within that context. This is a fundamental Frida limitation.
 
@@ -401,6 +360,69 @@ registerFn(logCallback);
 ```
 
 **Key insight:** Direct function pointer calls work in all contexts; Frida interception does not.
+
+### Challenge 6: Why Frida's `Interceptor.attach()` Cannot Be Used
+
+**Problem:** The natural approach for hooking would be to use Frida's `Interceptor.attach()` directly on game code addresses. However, this fundamentally doesn't work for NCE hooks due to how Frida implements interception on ARM64.
+
+**How Frida's `Interceptor.attach()` works on ARM64:**
+
+Frida overwrites **16 bytes (4 instructions)** at the target address with a trampoline that redirects execution to Frida's handler:
+
+```
+Original code:              After Interceptor.attach():
+┌──────────────────┐        ┌──────────────────┐
+│ inst1 (target)   │   →    │ LDR X16, #8      │  ← Frida's trampoline
+│ inst2            │   →    │ BR X16           │
+│ inst3            │   →    │ <addr_low>       │  ← 8-byte pointer to handler
+│ inst4            │   →    │ <addr_high>      │
+│ inst5            │        │ inst5            │
+└──────────────────┘        └──────────────────┘
+```
+
+**Why this breaks game code:**
+
+1. **Mid-function branch targets:** Game code may have branches that jump to `inst2`, `inst3`, or `inst4`. After Frida's modification:
+   - A `B` instruction targeting `inst2` now lands on `BR X16` → jumps to Frida handler with wrong context
+   - A `B` instruction targeting `inst3` now executes garbage (pointer bytes as instructions) → **crash**
+   
+   ```
+   Example crash scenario:
+   
+   0x1000: CBZ X0, 0x1008    ; Branch to inst3 if X0 == 0
+   0x1004: inst2             ; Overwritten by BR X16
+   0x1008: inst3             ; Overwritten by pointer bytes ← CRASH when branch taken
+   0x100C: inst4             ; Overwritten by pointer bytes
+   ```
+
+2. **No function boundaries:** Frida's `Interceptor.attach()` works best when it hooks function entry points where the first 4 instructions can safely be relocated. However, most of Agent's hooks are located in the middle of functions.
+
+**Why UDF-based hooks work:**
+
+Our approach modifies only **4 bytes (1 instruction)** with `UDF #0`:
+
+```
+Original code:              After NceInstallExternalHook():
+┌──────────────────┐        ┌──────────────────┐
+│ inst1 (target)   │   →    │ UDF #0 (SIGILL)  │  ← Only this changes
+│ inst2            │        │ inst2            │  ← Untouched
+│ inst3            │        │ inst3            │  ← Untouched
+│ inst4            │        │ inst4            │  ← Untouched
+└──────────────────┘        └──────────────────┘
+```
+
+Advantages:
+- **Atomic:** A single 4-byte aligned write is atomic on ARM64
+- **No collateral damage:** Surrounding instructions remain valid branch targets
+- **Signal-safe:** The SIGILL handler is already part of NCE's architecture
+- **Reversible:** Original instruction is stored and can be restored
+
+**Summary:**
+
+| Approach | Bytes Modified | Safe for mid-code hooks? |
+|----------|---------------|-------------------------|
+| `Interceptor.attach()` | 16 bytes (4 inst) | No |
+| UDF + Signal Handler | 4 bytes (1 inst) | Yes |
 
 ---
 
@@ -613,24 +635,6 @@ const gint handled_signals[] = {
 | Hook installed but no text | Wrong register/address | Check JS script for correct register |
 | Instruction mismatch | Wrong game version or base | Verify MOD0 scan found correct base |
 
-### Debug Logging
-
-Add verbose logging in your Frida script:
-```javascript
-Interceptor.attach(nceTrampoline, {
-    onEnter(args) {
-        const pc = args[0];
-        const context = args[1];
-        const x0 = context.readPointer();
-        const x1 = context.add(0x08).readPointer();
-        const sp = context.add(0xF8).readPointer();
-        
-        console.log(`Hook triggered at PC=${pc}`);
-        console.log(`  X0=${x0} X1=${x1} SP=${sp}`);
-    }
-});
-```
-
 ### Verifying Hook Installation
 
 Before installing, verify the instruction at the target address:
@@ -640,10 +644,10 @@ const instruction = hookAddr.readU32();
 console.log(`Address: ${hookAddr}, Instruction: ${instruction.toString(16)}`);
 
 if (instruction === 0x710006FF) {
-    console.log('✓ Instruction matches expected value');
+    console.log('Instruction matches expected value');
     NceInstallExternalHook(uint64(hookAddr.toString()), instruction);
 } else {
-    console.log('✗ Instruction mismatch - check base address or game version');
+    console.log('Instruction mismatch - check base address or game version');
 }
 ```
 
