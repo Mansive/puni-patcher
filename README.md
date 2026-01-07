@@ -60,7 +60,7 @@ Then verify your repo is at the correct base commit.
     }
     ```
 
-After patches are applied and the Frida `.so` are placed in the right directory, follow the standard Eden build instructions for Android.
+After patches are applied and the Frida `.so` are placed in the right directory, follow the standard Eden build instructions for Android. Select the `puni` build flavor if you want the custom APK to not overwrite the official APK on your device.
 
 ## NCE Hooks Overview
 
