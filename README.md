@@ -49,7 +49,21 @@ Then verify your repo is at the correct base commit.
 
 ## Building
 
-After patches are applied, follow the standard Eden build instructions.
+1. Build [frida-gadget](https://frida.re/docs/building/) for ARM64 with the [necessary changes](https://github.com/Mansive/puni-patcher/blob/main/docs/NCEHooks.md#frida-signal-handler-conflict)
+2. Move `frida-gadget.so` into `src\android\app\src\main\jniLibs\arm64-v8a` and rename the file to `libfrida-gadget-raw.so`
+2. Create `libfrida-gadget-raw.config.so` in the same folder with the following text:
+    ```
+    {
+      "interaction": {
+        "type": "listen",
+        "address": "0.0.0.0",
+        "port": 27042,
+        "on_load": "resume"
+      }
+    }
+    ```
+
+After patches are applied and the Frida `.so` are placed in the right directory, follow the standard Eden build instructions for Android.
 
 ## NCE Hooks Overview
 

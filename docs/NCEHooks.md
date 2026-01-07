@@ -576,14 +576,16 @@ This ensures that even if a thread has the magic value, we only proceed with gue
 
 ### Frida Signal Handler Conflict
 
-**Problem:** Frida-gum also registers a SIGILL handler, which replaces NCE's handler. So when a hooked instruction executes:
+**Problem:** frida-gum also registers a SIGILL handler, which replaces NCE's handler. So when a hooked instruction executes:
 1. `UDF #0` triggers SIGILL
 2. Frida's handler catches it (not NCE's)
 3. Frida doesn't know how to handle NCE hooks
 4. Frida either aborts or chains to a wrong handler
 5. **Crash or infinite loop**
 
-**Solution:** Remove SIGILL from Frida's handled signals in `gumexceptor-posix.c`:
+Frida also registers handlers for SIGSEGV and SIGBUS, both of which conflict with NCE's signal handlers.
+
+**Solution:** Remove the culprit signals from Frida's handled signals in `gumexceptor-posix.c`:
 ```c
 const gint handled_signals[] = {
     SIGABRT,
