@@ -50,3 +50,7 @@ Then verify your repo is at the correct base commit.
 ## Building
 
 After patches are applied, follow the standard Eden build instructions.
+
+## NCE Hooks Overview
+
+![High-level Diagram](docs/nce_hooks_diagram.svg)
