@@ -28,9 +28,11 @@ sequenceDiagram
 
     E->>G: Write UDF (SIGILL)
     E-->>F: Success
+    deactivate E
     activate F
     F->>E: Hook NceTrampoline()
     deactivate F
+    activate E
     E->>G: Launch Game
     deactivate E
     activate G
