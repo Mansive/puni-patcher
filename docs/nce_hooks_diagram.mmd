@@ -5,7 +5,7 @@
 sequenceDiagram
     %% autonumber
     participant F as Agent / Frida (JS)
-    box rgba(248, 255, 237, 1) Emulation
+    box rgb(249, 255, 240) Emulation
     participant E as Eden Puni (C++)
     participant G as Game
     end
@@ -24,15 +24,18 @@ sequenceDiagram
         E->>E: Write Original Inst + Branch
     end
 
-    E->>G: Write UDF #0 (SIGILL)
+    E->>G: Write UDF (SIGILL)
     E-->>F: Success
-    deactivate E
+    activate F
+    F->>E: Hook NceTrampoline()
+    deactivate F
 
     Note over F, OS: Hook Execution Phase
+    deactivate E
 
     activate G
     G->>G: Execute Original Instructions
-    G->>OS: Execute UDF #0
+    G->>OS: Execute UDF
     deactivate G
     activate OS
     OS->>E: Signal SIGILL
@@ -42,18 +45,20 @@ sequenceDiagram
     
     E->>E: HandleGuestIllegalInstruction()
     
+    rect rgba(255, 240, 240, 1)
     break SIGILL not caused by hook
         E->>OS: Forward SIGILL (Crash)
-         deactivate E
+        deactivate E
+    end
     end
     activate  E
 
     E->>E: Lookup Hook Callback
     
-    E->>F: NceTrampoline(PC, Context)
+    E->>F: Call NceTrampoline()
     deactivate E
     activate F
-    F->>F: JS Handler (Interceptor)
+    F->>F: Interceptor Handler
     F-->>E: Return
     activate E
     deactivate F
