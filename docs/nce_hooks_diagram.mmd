@@ -1,12 +1,14 @@
 %%{init: {
-    %% 'theme': 'forest'
+    %% 'theme': 'neo'
 }}%%
 
 sequenceDiagram
     %% autonumber
-    participant F as Frida (JS)
-    participant E as Eden (C++)
+    participant F as Agent / Frida (JS)
+    box rgba(248, 255, 237, 1) Emulation
+    participant E as Eden Puni (C++)
     participant G as Game
+    end
     participant OS as OS / CPU
 
     Note over F, OS: Hook Installation Phase
@@ -28,7 +30,10 @@ sequenceDiagram
 
     Note over F, OS: Hook Execution Phase
 
+    activate G
+    G->>G: Execute Original Instructions
     G->>OS: Execute UDF #0
+    deactivate G
     activate OS
     OS->>E: Signal SIGILL
     deactivate OS
@@ -46,17 +51,23 @@ sequenceDiagram
     E->>E: Lookup Hook Callback
     
     E->>F: NceTrampoline(PC, Context)
+    deactivate E
     activate F
     F->>F: JS Handler (Interceptor)
     F-->>E: Return
+    activate E
     deactivate F
     
     Note over F, OS: Resumption Phase
     
     alt Trampoline Available
-        E->>G: Resume at Trampoline (Native)
+        E-->>G: Resume at Trampoline (Native)
     else Interpretation Required
-        E->>E: MatchAndExecuteOneInstruction()
-        E->>G: Resume at Next Instruction
+        E-->>E: MatchAndExecuteOneInstruction()
+        E-->>G: Resume at Next Instruction
+        deactivate E
     end
-    deactivate E
+    
+    activate G
+    G->>G: Continue Execution
+    deactivate G
