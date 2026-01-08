@@ -1,0 +1,28 @@
+From 9bf4df953196d9593cecf53955337c09d802a2d0 Mon Sep 17 00:00:00 2001
+From: Mansive <33560917+Mansive@users.noreply.github.com>
+Date: Thu, 8 Jan 2026 00:32:44 -0600
+Subject: [PATCH] Revise some logs for clarity
+
+---
+ src/core/arm/nce/nce_hooks.cpp | 6 +++---
+ 1 file changed, 3 insertions(+), 3 deletions(-)
+
+diff --git a/src/core/arm/nce/nce_hooks.cpp b/src/core/arm/nce/nce_hooks.cpp
+index 4affeea5bb..4478b6f058 100644
+--- a/src/core/arm/nce/nce_hooks.cpp
++++ b/src/core/arm/nce/nce_hooks.cpp
+@@ -417,11 +417,11 @@ bool NceInstallExternalHook(u64 address, u32 expected_instruction) {
+                              (unsigned long long)trampoline);
+             }
+         } else {
+-            NCE_LOG_WARNING("Failed to allocate trampoline for %08X (no native execution)",
+-                            original_instruction);
++            // mmap failure?
++            NCE_LOG_WARNING("Failed to allocate trampoline for %08X", original_instruction);
+         }
+     } else {
+-        NCE_LOG_DEBUG("Instruction %08X at %016llX is PC-relative (no trampoline needed)",
++        NCE_LOG_WARNING("Instruction %08X at %016llX is PC-relative and will use interpretation",
+                       original_instruction, (unsigned long long)address);
+     }
+ 
