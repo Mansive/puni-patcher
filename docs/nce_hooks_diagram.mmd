@@ -31,11 +31,12 @@ sequenceDiagram
     activate F
     F->>E: Hook NceTrampoline()
     deactivate F
+    E->>G: Launch Game
+    deactivate E
+    activate G
 
     Note over F, OS: Hook Execution Phase
-    deactivate E
 
-    activate G
     G->>G: Execute Original Instructions
     G->>OS: Execute UDF
     deactivate G
