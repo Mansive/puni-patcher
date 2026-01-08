@@ -13,7 +13,9 @@ sequenceDiagram
 
     Note over F, OS: Hook Installation Phase
 
+    activate F
     F->>E: NceInstallExternalHook(addr)
+    deactivate F
     activate E
     E->>G: Read original instruction
     
