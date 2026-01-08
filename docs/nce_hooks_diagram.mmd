@@ -50,7 +50,7 @@ sequenceDiagram
     
     rect rgba(255, 240, 240, 1)
     break SIGILL not caused by hook
-        E->>OS: Forward SIGILL (Crash)
+        E-xOS: Forward SIGILL (Crash)
         deactivate E
     end
     end
@@ -71,7 +71,7 @@ sequenceDiagram
     alt Trampoline Available
         E-->>G: Resume at Trampoline (Native)
     else Interpretation Required
-        E-->>E: MatchAndExecuteOneInstruction()
+        E->>E: MatchAndExecuteOneInstruction()
         E-->>G: Resume at Next Instruction
         deactivate E
     end
