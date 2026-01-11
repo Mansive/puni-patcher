@@ -1,4 +1,4 @@
-From 361c86dd17529238f714359ec6a5dce13bf9f86d Mon Sep 17 00:00:00 2001
+From 1f9af5ea22b2fc2671fc39712d510050fd4175eb Mon Sep 17 00:00:00 2001
 From: Mansive <33560917+Mansive@users.noreply.github.com>
 Date: Mon, 5 Jan 2026 18:56:10 -0600
 Subject: [PATCH] Ignore libfrida files
