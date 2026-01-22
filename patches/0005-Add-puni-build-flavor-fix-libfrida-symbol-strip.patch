@@ -1,4 +1,4 @@
-From 764416bbbfa0c4b2b88e55c198f3ee4d37b39dbf Mon Sep 17 00:00:00 2001
+From 110e6d4200599bac852ba2593d3461b45c9ff52e Mon Sep 17 00:00:00 2001
 From: Mansive <33560917+Mansive@users.noreply.github.com>
 Date: Tue, 6 Jan 2026 00:30:10 -0600
 Subject: [PATCH] Add puni build flavor, fix libfrida symbol strip
@@ -8,7 +8,7 @@ Subject: [PATCH] Add puni build flavor, fix libfrida symbol strip
  1 file changed, 11 insertions(+), 2 deletions(-)
 
 diff --git a/src/android/app/build.gradle.kts b/src/android/app/build.gradle.kts
-index 1b4c042705..82894b0a97 100644
+index d1b026a18f..075ab3137b 100644
 --- a/src/android/app/build.gradle.kts
 +++ b/src/android/app/build.gradle.kts
 @@ -54,8 +54,8 @@ android {
@@ -22,7 +22,7 @@ index 1b4c042705..82894b0a97 100644
      }
  
      androidResources {
-@@ -220,6 +220,15 @@ android {
+@@ -238,6 +238,15 @@ android {
                  }
              }
          }
@@ -37,4 +37,4 @@ index 1b4c042705..82894b0a97 100644
 +        }
      }
  
-     // this is really annoying but idk any other ways to fix this behavior
+     externalNativeBuild {

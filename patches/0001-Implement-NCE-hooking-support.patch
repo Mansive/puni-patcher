@@ -1,4 +1,4 @@
-From bfd5caedc9ac1387a3510c1952eeac8f4d8d67b8 Mon Sep 17 00:00:00 2001
+From 243139598798bf877f12864752deb66e3b9b2a6f Mon Sep 17 00:00:00 2001
 From: Mansive <33560917+Mansive@users.noreply.github.com>
 Date: Fri, 2 Jan 2026 16:38:42 -0600
 Subject: [PATCH] Implement NCE hooking support
@@ -104,7 +104,7 @@ index 0000000000..0096a20e73
 +  }
 +}
 diff --git a/src/android/app/build.gradle.kts b/src/android/app/build.gradle.kts
-index 61e817e546..1b4c042705 100644
+index 185704c8fe..d1b026a18f 100644
 --- a/src/android/app/build.gradle.kts
 +++ b/src/android/app/build.gradle.kts
 @@ -53,6 +53,9 @@ android {
@@ -136,7 +136,7 @@ index 61e817e546..1b4c042705 100644
                      )
                  )
 diff --git a/src/android/app/src/main/AndroidManifest.xml b/src/android/app/src/main/AndroidManifest.xml
-index 13007f10e4..3ab353b7b9 100644
+index c642dbdcda..ddc2ee3915 100644
 --- a/src/android/app/src/main/AndroidManifest.xml
 +++ b/src/android/app/src/main/AndroidManifest.xml
 @@ -47,7 +47,8 @@ SPDX-License-Identifier: GPL-3.0-or-later
@@ -163,10 +163,10 @@ index 151f7378d6..13ba3bca33 100644
 +YUZU_ANDROID_ARGS=-DUSE_CCACHE=true
 \ No newline at end of file
 diff --git a/src/core/CMakeLists.txt b/src/core/CMakeLists.txt
-index a961eff8bf..6f39ed0fa5 100644
+index 5c656f284d..49aab58655 100644
 --- a/src/core/CMakeLists.txt
 +++ b/src/core/CMakeLists.txt
-@@ -1228,6 +1228,8 @@ if (HAS_NCE)
+@@ -1240,6 +1240,8 @@ if (HAS_NCE)
          arm/nce/instructions.h
          arm/nce/interpreter_visitor.cpp
          arm/nce/interpreter_visitor.h
@@ -174,7 +174,7 @@ index a961eff8bf..6f39ed0fa5 100644
 +        arm/nce/nce_hooks.h
          arm/nce/patcher.cpp
          arm/nce/patcher.h
-         arm/nce/visitor_base.h
+         arm/nce/visitor_base.h)
 diff --git a/src/core/arm/nce/arm_nce.cpp b/src/core/arm/nce/arm_nce.cpp
 index cc1e016ba1..1394b6f370 100644
 --- a/src/core/arm/nce/arm_nce.cpp

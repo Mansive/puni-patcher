@@ -10,7 +10,7 @@ index 0be76d85cd..2e50a5fded 100644
 +libfrida*
 \ No newline at end of file
 diff --git a/src/android/app/build.gradle.kts b/src/android/app/build.gradle.kts
-index 61e817e546..82894b0a97 100644
+index 185704c8fe..075ab3137b 100644
 --- a/src/android/app/build.gradle.kts
 +++ b/src/android/app/build.gradle.kts
 @@ -53,6 +53,9 @@ android {
@@ -41,7 +41,7 @@ index 61e817e546..82894b0a97 100644
                          *extraCMakeArgs.toTypedArray()
                      )
                  )
-@@ -213,6 +220,15 @@ android {
+@@ -231,6 +238,15 @@ android {
                  }
              }
          }
@@ -56,12 +56,12 @@ index 61e817e546..82894b0a97 100644
 +        }
      }
  
-     // this is really annoying but idk any other ways to fix this behavior
+     externalNativeBuild {
 diff --git a/src/core/CMakeLists.txt b/src/core/CMakeLists.txt
-index a961eff8bf..6f39ed0fa5 100644
+index 5c656f284d..49aab58655 100644
 --- a/src/core/CMakeLists.txt
 +++ b/src/core/CMakeLists.txt
-@@ -1228,6 +1228,8 @@ if (HAS_NCE)
+@@ -1240,6 +1240,8 @@ if (HAS_NCE)
          arm/nce/instructions.h
          arm/nce/interpreter_visitor.cpp
          arm/nce/interpreter_visitor.h
@@ -69,7 +69,7 @@ index a961eff8bf..6f39ed0fa5 100644
 +        arm/nce/nce_hooks.h
          arm/nce/patcher.cpp
          arm/nce/patcher.h
-         arm/nce/visitor_base.h
+         arm/nce/visitor_base.h)
 diff --git a/src/core/arm/nce/arm_nce.cpp b/src/core/arm/nce/arm_nce.cpp
 index cc1e016ba1..1394b6f370 100644
 --- a/src/core/arm/nce/arm_nce.cpp

@@ -1,4 +1,4 @@
-From ca1b3da610a6374c87fbb89d81e7f5e5919d220e Mon Sep 17 00:00:00 2001
+From b8d094c7beec64fc4ad37c80e092e8da922b79fc Mon Sep 17 00:00:00 2001
 From: Mansive <33560917+Mansive@users.noreply.github.com>
 Date: Mon, 5 Jan 2026 22:32:42 -0600
 Subject: [PATCH] Revert change to AndroidManifest.xml
@@ -35,7 +35,7 @@ index 0096a20e73..0000000000
 -  }
 -}
 diff --git a/src/android/app/src/main/AndroidManifest.xml b/src/android/app/src/main/AndroidManifest.xml
-index 3ab353b7b9..13007f10e4 100644
+index ddc2ee3915..c642dbdcda 100644
 --- a/src/android/app/src/main/AndroidManifest.xml
 +++ b/src/android/app/src/main/AndroidManifest.xml
 @@ -47,8 +47,7 @@ SPDX-License-Identifier: GPL-3.0-or-later

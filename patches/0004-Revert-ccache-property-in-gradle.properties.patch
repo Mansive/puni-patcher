@@ -1,4 +1,4 @@
-From cd0be8fd07cca9e3a6e993c421bbbbf995efd868 Mon Sep 17 00:00:00 2001
+From c1ca9ea178a21b711e3810bc9d12a6982853985c Mon Sep 17 00:00:00 2001
 From: Mansive <33560917+Mansive@users.noreply.github.com>
 Date: Mon, 5 Jan 2026 22:57:54 -0600
 Subject: [PATCH] Revert ccache property in gradle.properties
