@@ -1,4 +1,4 @@
-From 243139598798bf877f12864752deb66e3b9b2a6f Mon Sep 17 00:00:00 2001
+From e68c0f9887519b403dcaa305fb9118e83db588af Mon Sep 17 00:00:00 2001
 From: Mansive <33560917+Mansive@users.noreply.github.com>
 Date: Fri, 2 Jan 2026 16:38:42 -0600
 Subject: [PATCH] Implement NCE hooking support
@@ -163,10 +163,10 @@ index 151f7378d6..13ba3bca33 100644
 +YUZU_ANDROID_ARGS=-DUSE_CCACHE=true
 \ No newline at end of file
 diff --git a/src/core/CMakeLists.txt b/src/core/CMakeLists.txt
-index 5c656f284d..49aab58655 100644
+index 14eb331d24..03ddcf5a0e 100644
 --- a/src/core/CMakeLists.txt
 +++ b/src/core/CMakeLists.txt
-@@ -1240,6 +1240,8 @@ if (HAS_NCE)
+@@ -1242,6 +1242,8 @@ if (HAS_NCE)
          arm/nce/instructions.h
          arm/nce/interpreter_visitor.cpp
          arm/nce/interpreter_visitor.h

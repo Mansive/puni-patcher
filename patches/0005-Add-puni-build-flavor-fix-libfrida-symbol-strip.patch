@@ -1,4 +1,4 @@
-From 110e6d4200599bac852ba2593d3461b45c9ff52e Mon Sep 17 00:00:00 2001
+From eaed4966b95cacbe22edd67cd2178e0a54f8bd0c Mon Sep 17 00:00:00 2001
 From: Mansive <33560917+Mansive@users.noreply.github.com>
 Date: Tue, 6 Jan 2026 00:30:10 -0600
 Subject: [PATCH] Add puni build flavor, fix libfrida symbol strip
