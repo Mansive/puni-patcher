@@ -147,7 +147,7 @@ NCE hooks use two different execution strategies depending on the instruction ty
 
 #### PC-Relative Instruction Emulation (`interpreter_visitor.cpp`)
 
-When a hook is installed on a PC-relative instruction, `MatchAndExecuteOneInstruction()` emulates it using the `InterpreterVisitor` class with Dynarmic's decoder.
+When a hook is installed on a PC-relative instruction, `MatchAndExecuteOneInstruction()` emulates it using the `InterpreterVisitor` class with Dynarmic's decoder. The hook path passes the saved original opcode as an override, because the instruction in memory has already been replaced by `UDF #0`.
 
 **Supported PC-relative instructions:**
 
@@ -171,7 +171,7 @@ When a hook is installed on a PC-relative instruction, `MatchAndExecuteOneInstru
 ```cpp
 // In HandleHookIfInstalled() when no trampoline exists:
 auto& memory = guest_ctx->system->ApplicationMemory();
-auto next_pc = MatchAndExecuteOneInstruction(memory, &host_ctx, fpctx);
+auto next_pc = MatchAndExecuteOneInstruction(memory, &host_ctx, fpctx, original_inst);
 if (next_pc) {
     host_ctx.pc = *next_pc;
     guest_ctx->pc = *next_pc;
@@ -183,6 +183,8 @@ The `InterpreterVisitor` now includes:
 - Optional `pstate` pointer for condition flag evaluation (N, Z, C, V)
 - `m_next_pc` optional to return computed branch targets
 - `GetNextPc()` method to retrieve branch target or fall back to PC + 4
+- Optional instruction override in `MatchAndExecuteOneInstruction(...)` for hook fallback
+- `GetReg()`/`SetReg()` handling for `R31/ZR` semantics (read as zero, writes ignored)
 
 ### Native Execution Trampolines (`nce_hooks.cpp`)
 
@@ -233,24 +235,43 @@ bool IsPcRelative(u32 inst) {
 
 These instructions are emulated via `MatchAndExecuteOneInstruction()` using the `InterpreterVisitor` class.
 
-#### Signal-Safe Trampoline Lookup
+#### Signal-Safe Hook and Trampoline Lookup
 
-The trampoline lookup table uses atomic operations for thread safety without locks:
+Hook and trampoline tables now use guarded reusable slots. Signal handlers do lock-free stable reads, while install/remove operations publish updates using a guard version.
+
 ```cpp
-static TrampolineEntry s_trampolines[MaxTrampolines];
-static std::atomic<size_t> s_trampoline_count{0};
+struct TrampolineEntry {
+    std::atomic<u32> guard{0}; // odd=writer in progress, even=stable
+    std::atomic<u64> address{0};
+    std::atomic<u64> trampoline_address{0};
+};
 
-u64 GetTrampoline(u64 address) {
-    // Signal-safe: no locks, just atomic read
-    const size_t count = s_trampoline_count.load(std::memory_order_acquire);
-    for (size_t i = 0; i < count; ++i) {
-        if (s_trampolines[i].address == address) {
-            return s_trampolines[i].trampoline_address;
-        }
-    }
-    return 0;
+bool ReadTrampolineEntryStable(const TrampolineEntry& entry, u64* address,
+                               u64* trampoline_address) {
+    const u32 before = entry.guard.load(std::memory_order_acquire);
+    if (before & 1U) return false;
+
+    const u64 a = entry.address.load(std::memory_order_relaxed);
+    const u64 t = entry.trampoline_address.load(std::memory_order_relaxed);
+
+    const u32 after = entry.guard.load(std::memory_order_acquire);
+    if (before != after || (after & 1U)) return false;
+
+    *address = a;
+    *trampoline_address = t;
+    return true;
 }
 ```
+
+Key details:
+- Remove/clear operations do not compact tables anymore (no move-last entry race)
+- Slots are safely reusable under churn
+- Lookup scans the fixed-size table and skips unstable entries
+
+#### Page Size and Context Hardening
+
+- Hook patching and trampoline page management now use runtime host page size (`sysconf(_SC_PAGESIZE)`, fallback `4096`) for `mprotect`, `mmap`, and `munmap`
+- FP/SIMD state access in the hook path now walks `_aarch64_ctx` headers until `FPSIMD_MAGIC` instead of assuming a fixed offset
 
 ---
 
@@ -271,8 +292,10 @@ u64 GetTrampoline(u64 address) {
 **Symptoms (before fix):**
 - `Hook at XXXX has no trampoline, instruction XXXX may not execute correctly`
 - Game logic errors (wrong branch taken, wrong address loaded)
+- `Unallocated encoding: 0x0`
+- `Failed to emulate instruction XXXXXXXX at ...`
 
-**Solution:** Implemented full PC-relative instruction emulation in `interpreter_visitor.cpp` using Dynarmic's decoder. All common PC-relative instructions are now supported:
+**Solution:** Implemented full PC-relative instruction emulation in `interpreter_visitor.cpp` using Dynarmic's decoder, then fixed hook fallback to decode the saved original instruction (not patched `UDF #0`). All common PC-relative instructions are now supported:
 - Address generation: `ADR`, `ADRP`
 - Unconditional branches: `B`, `BL`
 - Conditional branches: `B.cond` (with NZCV flag evaluation)
@@ -280,6 +303,7 @@ u64 GetTrampoline(u64 address) {
 - Test and branch: `TBZ`, `TBNZ`
 - Literal loads: `LDR (literal)`, `LDRSW (literal)`, `LDR SIMD (literal)`
 - Prefetch: `PRFM (literal)` (no-op)
+- Register edge case: `R31/ZR` handling in interpreter register access
 
 ### Challenge 3: Flag Calculation Errors
 
@@ -629,7 +653,8 @@ const gint handled_signals[] = {
 | Symptom | Cause | Solution |
 |---------|-------|----------|
 | `Unmapped ReadBlock @ 0x...` | Invalid address | Check MOD0 base address, verify game version |
-| `Failed to emulate instruction` | Unsupported PC-relative instruction | Add implementation to `interpreter_visitor.cpp` |
+| `Unallocated encoding: 0x0` | PC-relative fallback decoded patched `UDF #0` instead of original opcode | Rebuild with the instruction-override fix and verify `MatchAndExecuteOneInstruction(..., original_inst)` is used |
+| `Failed to emulate instruction` | Unsupported opcode or stale build without recent fallback fixes | Verify latest `nce_hooks.cpp` + `interpreter_visitor.cpp`; add missing instruction implementation if genuinely unsupported |
 | `vtable bouncing` spam | Signal handler loop | Check instruction emulation returns `pc + 4` |
 | Game crash after hook | Wrong flags or corrupted state | Add logging, verify flag calculation |
 | Hook installed but no text | Wrong register/address | Check JS script for correct register |
