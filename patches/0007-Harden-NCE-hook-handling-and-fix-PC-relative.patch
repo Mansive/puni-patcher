@@ -1,0 +1,788 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Mansive <33560917+Mansive@users.noreply.github.com>
+Date: Mon, 9 Feb 2026 18:42:42 -0600
+Subject: [PATCH] Harden NCE hook handling and fix PC-relative...
+
+...fallback emulation.
+
+Use guarded reusable hook/trampoline slots and runtime page-size-aware patching to improve signal-path safety, rollback correctness, and compatibility on non-4K page devices. Execute PC-relative fallback from the saved original opcode (instead of patched UDF memory) and handle ZR/R31 correctly in InterpreterVisitor to avoid unallocated-encoding failures and edge-case register bugs.
+---
+ src/core/arm/nce/interpreter_visitor.cpp |  21 +-
+ src/core/arm/nce/interpreter_visitor.h   |   4 +-
+ src/core/arm/nce/nce_hooks.cpp           | 514 +++++++++++++++++------
+ 3 files changed, 412 insertions(+), 127 deletions(-)
+
+diff --git a/src/core/arm/nce/interpreter_visitor.cpp b/src/core/arm/nce/interpreter_visitor.cpp
+index e6393a80e1..ddaff2058c 100644
+--- a/src/core/arm/nce/interpreter_visitor.cpp
++++ b/src/core/arm/nce/interpreter_visitor.cpp
+@@ -151,7 +151,13 @@ u128 InterpreterVisitor::GetVec(Vec v) {
+ }
+ 
+ u64 InterpreterVisitor::GetReg(Reg r) {
+-    return m_regs[static_cast<u32>(r)];
++    if (r == Reg::ZR) {
++        return 0;
++    }
++
++    const size_t index = static_cast<size_t>(r);
++    ASSERT(index < m_regs.size());
++    return m_regs[index];
+ }
+ 
+ u64 InterpreterVisitor::GetSp() {
+@@ -167,7 +173,13 @@ void InterpreterVisitor::SetVec(Vec v, u128 value) {
+ }
+ 
+ void InterpreterVisitor::SetReg(Reg r, u64 value) {
+-    m_regs[static_cast<u32>(r)] = value;
++    if (r == Reg::ZR) {
++        return;
++    }
++
++    const size_t index = static_cast<size_t>(r);
++    ASSERT(index < m_regs.size());
++    m_regs[index] = value;
+ }
+ 
+ void InterpreterVisitor::SetSp(u64 value) {
+@@ -762,7 +774,8 @@ bool InterpreterVisitor::LDR_reg_fpsimd(Imm<2> size, Imm<1> opc_1, Reg Rm, Imm<3
+ }
+ 
+ std::optional<u64> MatchAndExecuteOneInstruction(Core::Memory::Memory& memory, mcontext_t* context,
+-                                                 fpsimd_context* fpsimd_context) {
++                                                 fpsimd_context* fpsimd_context,
++                                                 std::optional<u32> instruction_override) {
+     std::span<u64, 31> regs(reinterpret_cast<u64*>(context->regs), 31);
+     std::span<u128, 32> vregs(reinterpret_cast<u128*>(fpsimd_context->vregs), 32);
+     u64& sp = *reinterpret_cast<u64*>(&context->sp);
+@@ -770,7 +783,7 @@ std::optional<u64> MatchAndExecuteOneInstruction(Core::Memory::Memory& memory, m
+     u64 pstate = static_cast<u64>(context->pstate);
+ 
+     InterpreterVisitor visitor(memory, regs, vregs, sp, pc, &pstate);
+-    u32 instruction = memory.Read32(pc);
++    const u32 instruction = instruction_override.value_or(memory.Read32(pc));
+     bool was_executed = false;
+ 
+     if (auto decoder = Dynarmic::A64::Decode<VisitorBase>(instruction)) {
+diff --git a/src/core/arm/nce/interpreter_visitor.h b/src/core/arm/nce/interpreter_visitor.h
+index b798d235b8..c7b352043d 100644
+--- a/src/core/arm/nce/interpreter_visitor.h
++++ b/src/core/arm/nce/interpreter_visitor.h
+@@ -126,6 +126,8 @@ private:
+ };
+ 
+ std::optional<u64> MatchAndExecuteOneInstruction(Core::Memory::Memory& memory, mcontext_t* context,
+-                                                 fpsimd_context* fpsimd_context);
++                                                 fpsimd_context* fpsimd_context,
++                                                 std::optional<u32> instruction_override =
++                                                     std::nullopt);
+ 
+ } // namespace Core
+diff --git a/src/core/arm/nce/nce_hooks.cpp b/src/core/arm/nce/nce_hooks.cpp
+index 4478b6f058..a10b4ee424 100644
+--- a/src/core/arm/nce/nce_hooks.cpp
++++ b/src/core/arm/nce/nce_hooks.cpp
+@@ -9,8 +9,8 @@
+ #include "core/core.h"
+ #include "core/memory.h"
+ 
+-#include <algorithm>
+ #include <atomic>
++#include <cerrno>
+ #include <cstdio>
+ #include <cstring>
+ #include <mutex>
+@@ -19,6 +19,7 @@
+ #include <signal.h>
+ #include <sys/mman.h>
+ #include <ucontext.h>
++#include <unistd.h>
+ 
+ // Atomic callback pointer for thread-safe log callback registration
+ static std::atomic<NceLogCallback> s_log_callback{nullptr};
+@@ -69,14 +70,16 @@ namespace Core::NceHooks {
+ // Hook callback signature - using raw function pointer for signal safety
+ using HookCallback = void (*)(GuestContext*);
+ 
+-// Lock-free hook storage for signal safety
+-// Using a fixed-size array to avoid any heap allocation or locking in signal handler
++// Lock-free hook storage for signal safety.
++// Uses guarded slots so readers in signal context can observe stable snapshots
++// while install/remove mutates entries under mutex.
+ static constexpr size_t MaxHooks = 64;
+ 
+ struct HookEntry {
+-    u64 address; // Host address where hook is installed (0 = unused slot)
+-    u32 original_instruction;
+-    HookCallback callback;
++    std::atomic<u32> guard{0}; // even=stable, odd=writer in progress
++    std::atomic<u64> address{0};
++    std::atomic<u32> original_instruction{0};
++    std::atomic<HookCallback> callback{nullptr};
+ };
+ 
+ static HookEntry s_hooks[MaxHooks]{};
+@@ -94,7 +97,7 @@ static thread_local GuestContext* s_current_context = nullptr;
+ // are handled via emulation.
+ 
+ constexpr size_t MaxTrampolines = 256;
+-constexpr size_t TrampolinePageSize = 4096;
++constexpr size_t TrampolinePageSizeFallback = 4096;
+ 
+ // Each trampoline contains:
+ // - The original instruction (4 bytes)
+@@ -114,18 +117,248 @@ static_assert(sizeof(TrampolineBlock) == 24, "TrampolineBlock must be 24 bytes")
+ 
+ // Signal-safe trampoline lookup table (no locks needed for reads)
+ struct TrampolineEntry {
+-    u64 address;            // Host address where hook is installed
+-    u64 trampoline_address; // Address of the trampoline code
++    std::atomic<u32> guard{0}; // even=stable, odd=writer in progress
++    std::atomic<u64> address{0};
++    std::atomic<u64> trampoline_address{0};
+ };
+ 
+-static TrampolineEntry s_trampolines[MaxTrampolines];
++static TrampolineEntry s_trampolines[MaxTrampolines]{};
+ static std::atomic<size_t> s_trampoline_count{0};
+ 
+ // Executable memory pages for trampolines
+ static std::vector<void*> s_trampoline_pages;
+ static u8* s_current_page = nullptr;
+ static size_t s_page_offset = 0;
+-static std::mutex s_trampoline_mutex;
++
++// Runtime host page size used for mprotect/mmap/munmap.
++static size_t GetHostPageSize() {
++    static const size_t host_page_size = [] {
++        const long page_size = sysconf(_SC_PAGESIZE);
++        if (page_size <= 0) {
++            return TrampolinePageSizeFallback;
++        }
++        return static_cast<size_t>(page_size);
++    }();
++    return host_page_size;
++}
++
++struct MemoryProtectRange {
++    void* page_start;
++    size_t page_size;
++};
++
++static MemoryProtectRange GetMemoryProtectRange(u64 address, size_t size) {
++    const size_t page_size = GetHostPageSize();
++    const u64 page_size_u64 = static_cast<u64>(page_size);
++
++    const u64 aligned_start = address - (address % page_size_u64);
++    const u64 end = address + static_cast<u64>(size);
++    const u64 aligned_end =
++        ((end + page_size_u64 - 1) / page_size_u64) * page_size_u64;
++
++    return {
++        reinterpret_cast<void*>(aligned_start),
++        static_cast<size_t>(aligned_end - aligned_start),
++    };
++}
++
++// Guard helpers for signal-safe slot publishing.
++static void BeginGuardedWrite(std::atomic<u32>& guard) {
++    guard.fetch_add(1, std::memory_order_acq_rel);
++}
++
++static void EndGuardedWrite(std::atomic<u32>& guard) {
++    guard.fetch_add(1, std::memory_order_release);
++}
++
++static bool ReadHookEntryStable(const HookEntry& entry, u64* out_address,
++                                u32* out_instruction,
++                                HookCallback* out_callback) {
++    const u32 before = entry.guard.load(std::memory_order_acquire);
++    if ((before & 1U) != 0) {
++        return false;
++    }
++
++    const u64 address = entry.address.load(std::memory_order_relaxed);
++    const u32 instruction = entry.original_instruction.load(std::memory_order_relaxed);
++    const HookCallback callback = entry.callback.load(std::memory_order_relaxed);
++
++    const u32 after = entry.guard.load(std::memory_order_acquire);
++    if (before != after || (after & 1U) != 0) {
++        return false;
++    }
++
++    *out_address = address;
++    *out_instruction = instruction;
++    *out_callback = callback;
++    return true;
++}
++
++static void PublishHookEntry(size_t index, u64 address, u32 original_instruction,
++                             HookCallback callback) {
++    auto& entry = s_hooks[index];
++    BeginGuardedWrite(entry.guard);
++    entry.address.store(address, std::memory_order_relaxed);
++    entry.original_instruction.store(original_instruction, std::memory_order_relaxed);
++    entry.callback.store(callback, std::memory_order_relaxed);
++    EndGuardedWrite(entry.guard);
++}
++
++static void ClearHookEntry(size_t index) {
++    auto& entry = s_hooks[index];
++    BeginGuardedWrite(entry.guard);
++    entry.callback.store(nullptr, std::memory_order_relaxed);
++    entry.original_instruction.store(0, std::memory_order_relaxed);
++    entry.address.store(0, std::memory_order_relaxed);
++    EndGuardedWrite(entry.guard);
++}
++
++static std::optional<size_t> FindHookSlotByAddress(u64 address) {
++    for (size_t i = 0; i < MaxHooks; ++i) {
++        u64 entry_address{};
++        u32 entry_instruction{};
++        HookCallback entry_callback = nullptr;
++        if (!ReadHookEntryStable(s_hooks[i], &entry_address, &entry_instruction,
++                                 &entry_callback)) {
++            continue;
++        }
++
++        if (entry_address == address && entry_callback != nullptr) {
++            return i;
++        }
++    }
++    return std::nullopt;
++}
++
++static std::optional<size_t> FindFreeHookSlot() {
++    for (size_t i = 0; i < MaxHooks; ++i) {
++        u64 entry_address{};
++        u32 entry_instruction{};
++        HookCallback entry_callback = nullptr;
++        if (!ReadHookEntryStable(s_hooks[i], &entry_address, &entry_instruction,
++                                 &entry_callback)) {
++            continue;
++        }
++
++        if (entry_address == 0 && entry_callback == nullptr) {
++            return i;
++        }
++    }
++    return std::nullopt;
++}
++
++static size_t CountHooks() {
++    size_t count = 0;
++    for (size_t i = 0; i < MaxHooks; ++i) {
++        u64 entry_address{};
++        u32 entry_instruction{};
++        HookCallback entry_callback = nullptr;
++        if (!ReadHookEntryStable(s_hooks[i], &entry_address, &entry_instruction,
++                                 &entry_callback)) {
++            continue;
++        }
++
++        if (entry_address != 0 && entry_callback != nullptr) {
++            ++count;
++        }
++    }
++    return count;
++}
++
++static bool ReadTrampolineEntryStable(const TrampolineEntry& entry,
++                                      u64* out_address,
++                                      u64* out_trampoline_address) {
++    const u32 before = entry.guard.load(std::memory_order_acquire);
++    if ((before & 1U) != 0) {
++        return false;
++    }
++
++    const u64 address = entry.address.load(std::memory_order_relaxed);
++    const u64 trampoline_address = entry.trampoline_address.load(std::memory_order_relaxed);
++
++    const u32 after = entry.guard.load(std::memory_order_acquire);
++    if (before != after || (after & 1U) != 0) {
++        return false;
++    }
++
++    *out_address = address;
++    *out_trampoline_address = trampoline_address;
++    return true;
++}
++
++static void PublishTrampolineEntry(size_t index, u64 address, u64 trampoline_address) {
++    auto& entry = s_trampolines[index];
++    BeginGuardedWrite(entry.guard);
++    entry.address.store(address, std::memory_order_relaxed);
++    entry.trampoline_address.store(trampoline_address, std::memory_order_relaxed);
++    EndGuardedWrite(entry.guard);
++}
++
++static void ClearTrampolineEntry(size_t index) {
++    auto& entry = s_trampolines[index];
++    BeginGuardedWrite(entry.guard);
++    entry.trampoline_address.store(0, std::memory_order_relaxed);
++    entry.address.store(0, std::memory_order_relaxed);
++    EndGuardedWrite(entry.guard);
++}
++
++static std::optional<size_t> FindTrampolineSlotByAddress(u64 address) {
++    for (size_t i = 0; i < MaxTrampolines; ++i) {
++        u64 entry_address{};
++        u64 trampoline_address{};
++        if (!ReadTrampolineEntryStable(s_trampolines[i], &entry_address,
++                                       &trampoline_address)) {
++            continue;
++        }
++
++        if (entry_address == address && trampoline_address != 0) {
++            return i;
++        }
++    }
++    return std::nullopt;
++}
++
++static std::optional<size_t> FindFreeTrampolineSlot() {
++    for (size_t i = 0; i < MaxTrampolines; ++i) {
++        u64 entry_address{};
++        u64 trampoline_address{};
++        if (!ReadTrampolineEntryStable(s_trampolines[i], &entry_address,
++                                       &trampoline_address)) {
++            continue;
++        }
++
++        if (entry_address == 0 && trampoline_address == 0) {
++            return i;
++        }
++    }
++    return std::nullopt;
++}
++
++static size_t CountTrampolines() {
++    size_t count = 0;
++    for (size_t i = 0; i < MaxTrampolines; ++i) {
++        u64 entry_address{};
++        u64 trampoline_address{};
++        if (!ReadTrampolineEntryStable(s_trampolines[i], &entry_address,
++                                       &trampoline_address)) {
++            continue;
++        }
++
++        if (entry_address != 0 && trampoline_address != 0) {
++            ++count;
++        }
++    }
++    return count;
++}
++
++// Keep this in sync with ArmNce::GetFloatingPointState.
++static fpsimd_context* GetFloatingPointState(mcontext_t& host_ctx) {
++    _aarch64_ctx* header = reinterpret_cast<_aarch64_ctx*>(&host_ctx.__reserved);
++    while (header->magic != FPSIMD_MAGIC) {
++        header = reinterpret_cast<_aarch64_ctx*>(reinterpret_cast<char*>(header) + header->size);
++    }
++    return reinterpret_cast<fpsimd_context*>(header);
++}
+ 
+ // Check if instruction uses PC-relative addressing
+ static bool IsPcRelative(u32 inst) {
+@@ -171,15 +404,17 @@ static bool IsPcRelative(u32 inst) {
+ 
+ // Allocate a trampoline for the given instruction
+ static u64 AllocateTrampoline(u32 instruction, u64 return_address) {
+-    // Check if we have room
++    // Check if we have room for another active trampoline entry.
+     if (s_trampoline_count.load(std::memory_order_acquire) >= MaxTrampolines) {
+         LOG_ERROR(Core_ARM, "Trampoline table full");
+         return 0;
+     }
+ 
++    const size_t host_page_size = GetHostPageSize();
++
+     // Allocate a new page if needed
+-    if (!s_current_page || s_page_offset + sizeof(TrampolineBlock) > TrampolinePageSize) {
+-        void* page = mmap(nullptr, TrampolinePageSize, PROT_READ | PROT_WRITE | PROT_EXEC,
++    if (!s_current_page || s_page_offset + sizeof(TrampolineBlock) > host_page_size) {
++        void* page = mmap(nullptr, host_page_size, PROT_READ | PROT_WRITE | PROT_EXEC,
+                           MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+         if (page == MAP_FAILED) {
+             LOG_ERROR(Core_ARM, "Failed to allocate trampoline page: {}", strerror(errno));
+@@ -225,34 +460,34 @@ static u64 AllocateTrampoline(u32 instruction, u64 return_address) {
+     return trampoline_addr;
+ }
+ 
+-// Register a trampoline in the lookup table (must hold s_mutex)
+-static bool RegisterTrampoline(u64 address, u64 trampoline_address) {
+-    size_t count = s_trampoline_count.load(std::memory_order_acquire);
+-    if (count >= MaxTrampolines) {
+-        return false;
++// Register a trampoline in the lookup table (must hold s_hooks_install_mutex).
++static std::optional<size_t> RegisterTrampoline(u64 address, u64 trampoline_address) {
++    if (FindTrampolineSlotByAddress(address).has_value()) {
++        return std::nullopt;
+     }
+ 
+-    // Store with release semantics so other threads see the complete entry
+-    s_trampolines[count].address = address;
+-    s_trampolines[count].trampoline_address = trampoline_address;
+-    s_trampoline_count.store(count + 1, std::memory_order_release);
++    const auto slot = FindFreeTrampolineSlot();
++    if (!slot.has_value()) {
++        return std::nullopt;
++    }
+ 
+-    return true;
++    PublishTrampolineEntry(*slot, address, trampoline_address);
++    s_trampoline_count.fetch_add(1, std::memory_order_release);
++
++    return slot;
+ }
+ 
+-// Unregister a trampoline (must hold s_hooks_install_mutex)
++// Unregister a trampoline (must hold s_hooks_install_mutex).
+ static void UnregisterTrampoline(u64 address) {
+-    size_t count = s_trampoline_count.load(std::memory_order_acquire);
++    const auto slot = FindTrampolineSlotByAddress(address);
++    if (!slot.has_value()) {
++        return;
++    }
+ 
+-    for (size_t i = 0; i < count; ++i) {
+-        if (s_trampolines[i].address == address) {
+-            // Move the last entry to fill the gap
+-            if (i < count - 1) {
+-                s_trampolines[i] = s_trampolines[count - 1];
+-            }
+-            s_trampoline_count.store(count - 1, std::memory_order_release);
+-            return;
+-        }
++    ClearTrampolineEntry(*slot);
++    const size_t count = s_trampoline_count.load(std::memory_order_relaxed);
++    if (count > 0) {
++        s_trampoline_count.store(count - 1, std::memory_order_release);
+     }
+ }
+ 
+@@ -270,17 +505,24 @@ static void ExternalHookCallback(GuestContext* ctx) {
+ 
+ bool HandleHookIfInstalled(GuestContext* guest_ctx, u64 fault_address, void* raw_info,
+                            void* raw_context) {
+-    // Signal-safe: lock-free lookup using atomic counter
+-    const size_t count = s_hook_count.load(std::memory_order_acquire);
++    (void)raw_info;
+ 
+     HookCallback callback = nullptr;
+     u32 original_inst = 0;
+ 
+-    for (size_t i = 0; i < count && i < MaxHooks; ++i) {
+-        const auto& entry = s_hooks[i];
+-        if (entry.address == fault_address) {
+-            callback = entry.callback;
+-            original_inst = entry.original_instruction;
++    for (size_t i = 0; i < MaxHooks; ++i) {
++        u64 entry_address{};
++        u32 entry_instruction{};
++        HookCallback entry_callback = nullptr;
++
++        if (!ReadHookEntryStable(s_hooks[i], &entry_address, &entry_instruction,
++                                 &entry_callback)) {
++            continue;
++        }
++
++        if (entry_address == fault_address && entry_callback != nullptr) {
++            callback = entry_callback;
++            original_inst = entry_instruction;
+             break;
+         }
+     }
+@@ -292,8 +534,7 @@ bool HandleHookIfInstalled(GuestContext* guest_ctx, u64 fault_address, void* raw
+ 
+     // Get host context for register save/restore
+     auto& host_ctx = static_cast<ucontext_t*>(raw_context)->uc_mcontext;
+-    auto* fpctx =
+-        reinterpret_cast<fpsimd_context*>(reinterpret_cast<u8*>(&host_ctx) + sizeof(mcontext_t));
++    auto* fpctx = GetFloatingPointState(host_ctx);
+ 
+     // Save guest state to GuestContext for the callback
+     std::memcpy(guest_ctx->cpu_registers.data(), host_ctx.regs, sizeof(host_ctx.regs));
+@@ -331,7 +572,7 @@ bool HandleHookIfInstalled(GuestContext* guest_ctx, u64 fault_address, void* raw
+     // Use the interpreter to emulate it.
+     auto& memory = guest_ctx->system->ApplicationMemory();
+ 
+-    auto next_pc = MatchAndExecuteOneInstruction(memory, &host_ctx, fpctx);
++    auto next_pc = MatchAndExecuteOneInstruction(memory, &host_ctx, fpctx, original_inst);
+     if (next_pc) {
+         host_ctx.pc = *next_pc;
+         guest_ctx->pc = *next_pc;
+@@ -347,12 +588,17 @@ bool HandleHookIfInstalled(GuestContext* guest_ctx, u64 fault_address, void* raw
+ }
+ 
+ u64 GetTrampoline(u64 address) {
+-    // Signal-safe: no locks, just atomic read
+-    const size_t count = s_trampoline_count.load(std::memory_order_acquire);
++    for (size_t i = 0; i < MaxTrampolines; ++i) {
++        u64 entry_address{};
++        u64 trampoline_address{};
++
++        if (!ReadTrampolineEntryStable(s_trampolines[i], &entry_address,
++                                       &trampoline_address)) {
++            continue;
++        }
+ 
+-    for (size_t i = 0; i < count && i < MaxTrampolines; ++i) {
+-        if (s_trampolines[i].address == address) {
+-            return s_trampolines[i].trampoline_address;
++        if (entry_address == address) {
++            return trampoline_address;
+         }
+     }
+ 
+@@ -390,31 +636,32 @@ bool NceInstallExternalHook(u64 address, u32 expected_instruction) {
+     // Install the hook using direct memory access
+     std::lock_guard lock(Core::NceHooks::s_hooks_install_mutex);
+ 
+-    // Check if already hooked
+-    size_t count = Core::NceHooks::s_hook_count.load(std::memory_order_relaxed);
+-    for (size_t i = 0; i < count && i < Core::NceHooks::MaxHooks; ++i) {
+-        if (Core::NceHooks::s_hooks[i].address == address) {
+-            NCE_LOG_WARNING("Hook already installed at %016llX", (unsigned long long)address);
+-            return true;
+-        }
++    if (Core::NceHooks::FindHookSlotByAddress(address).has_value()) {
++        NCE_LOG_WARNING("Hook already installed at %016llX", (unsigned long long)address);
++        return true;
+     }
+ 
+-    // Check capacity
+-    if (count >= Core::NceHooks::MaxHooks) {
++    const auto hook_slot = Core::NceHooks::FindFreeHookSlot();
++    if (!hook_slot.has_value()) {
+         NCE_LOG_ERROR("Cannot install hook at %016llX: max hooks (%zu) reached",
+                       (unsigned long long)address, Core::NceHooks::MaxHooks);
+         return false;
+     }
+ 
++    std::optional<size_t> trampoline_slot = std::nullopt;
++
+     // Create a native execution trampoline if the instruction is not PC-relative
+     if (!Core::NceHooks::IsPcRelative(original_instruction)) {
+         u64 trampoline = Core::NceHooks::AllocateTrampoline(original_instruction, address + 4);
+         if (trampoline != 0) {
+-            if (!Core::NceHooks::RegisterTrampoline(address, trampoline)) {
+-                NCE_LOG_WARNING("Failed to register trampoline");
+-            } else {
++            const auto registered_slot = Core::NceHooks::RegisterTrampoline(address, trampoline);
++            if (registered_slot.has_value()) {
++                trampoline_slot = registered_slot;
+                 NCE_LOG_INFO("Created trampoline for %08X at %016llX", original_instruction,
+                              (unsigned long long)trampoline);
++            } else {
++                NCE_LOG_WARNING("Failed to register trampoline for %016llX",
++                                (unsigned long long)address);
+             }
+         } else {
+             // mmap failure?
+@@ -422,26 +669,40 @@ bool NceInstallExternalHook(u64 address, u32 expected_instruction) {
+         }
+     } else {
+         NCE_LOG_WARNING("Instruction %08X at %016llX is PC-relative and will use interpretation",
+-                      original_instruction, (unsigned long long)address);
++                       original_instruction, (unsigned long long)address);
+     }
+ 
+-    // Store the hook entry
+-    Core::NceHooks::s_hooks[count].address = address;
+-    Core::NceHooks::s_hooks[count].original_instruction = original_instruction;
+-    Core::NceHooks::s_hooks[count].callback = Core::NceHooks::ExternalHookCallback;
+-
+-    std::atomic_thread_fence(std::memory_order_release);
+-    Core::NceHooks::s_hook_count.store(count + 1, std::memory_order_release);
++    // Publish hook entry before writing the trap, so concurrent execution does not
++    // observe a trap without an installed handler.
++    Core::NceHooks::PublishHookEntry(*hook_slot, address, original_instruction,
++                                     Core::NceHooks::ExternalHookCallback);
++    Core::NceHooks::s_hook_count.fetch_add(1, std::memory_order_release);
+ 
+     // Write the trap instruction (UDF #0 = 0x00000000) directly to host memory
+     // First, make the page writable
+-    const size_t page_size = 4096;
+-    void* page_start = reinterpret_cast<void*>(address & ~(page_size - 1));
+-    if (mprotect(page_start, page_size, PROT_READ | PROT_WRITE | PROT_EXEC) != 0) {
++    const auto protect_range = Core::NceHooks::GetMemoryProtectRange(address, sizeof(u32));
++    if (mprotect(protect_range.page_start, protect_range.page_size,
++                 PROT_READ | PROT_WRITE | PROT_EXEC) != 0) {
+         NCE_LOG_ERROR("NceInstallExternalHook: mprotect failed at %016llX: %s",
+                       (unsigned long long)address, strerror(errno));
+-        // Rollback the hook entry
+-        Core::NceHooks::s_hook_count.store(count, std::memory_order_release);
++
++        // Roll back all published state.
++        Core::NceHooks::ClearHookEntry(*hook_slot);
++        const size_t hook_count = Core::NceHooks::s_hook_count.load(std::memory_order_relaxed);
++        if (hook_count > 0) {
++            Core::NceHooks::s_hook_count.store(hook_count - 1, std::memory_order_release);
++        }
++
++        if (trampoline_slot.has_value()) {
++            Core::NceHooks::ClearTrampolineEntry(*trampoline_slot);
++            const size_t trampoline_count =
++                Core::NceHooks::s_trampoline_count.load(std::memory_order_relaxed);
++            if (trampoline_count > 0) {
++                Core::NceHooks::s_trampoline_count.store(trampoline_count - 1,
++                                                         std::memory_order_release);
++            }
++        }
++
+         return false;
+     }
+ 
+@@ -449,7 +710,11 @@ bool NceInstallExternalHook(u64 address, u32 expected_instruction) {
+     std::memcpy(reinterpret_cast<void*>(address), &trap_inst, sizeof(u32));
+ 
+     // Restore memory protection to read-execute
+-    mprotect(page_start, page_size, PROT_READ | PROT_EXEC);
++    if (mprotect(protect_range.page_start, protect_range.page_size,
++                 PROT_READ | PROT_EXEC) != 0) {
++        NCE_LOG_WARNING("NceInstallExternalHook: Failed to restore RX protection at %016llX: %s",
++                        (unsigned long long)address, strerror(errno));
++    }
+ 
+     // Invalidate instruction cache
+     __builtin___clear_cache(reinterpret_cast<char*>(address),
+@@ -462,50 +727,57 @@ bool NceInstallExternalHook(u64 address, u32 expected_instruction) {
+ bool NceRemoveExternalHook(u64 address) {
+     std::lock_guard lock(Core::NceHooks::s_hooks_install_mutex);
+ 
+-    size_t count = Core::NceHooks::s_hook_count.load(std::memory_order_relaxed);
+-    for (size_t i = 0; i < count && i < Core::NceHooks::MaxHooks; ++i) {
+-        if (Core::NceHooks::s_hooks[i].address == address) {
+-            // Restore the original instruction directly to host memory
+-            // First, make the page writable
+-            const size_t page_size = 4096;
+-            void* page_start = reinterpret_cast<void*>(address & ~(page_size - 1));
+-            if (mprotect(page_start, page_size, PROT_READ | PROT_WRITE | PROT_EXEC) != 0) {
+-                NCE_LOG_ERROR("NceRemoveExternalHook: mprotect failed at %016llX: %s",
+-                              (unsigned long long)address, strerror(errno));
+-                return false;
+-            }
+-
+-            std::memcpy(reinterpret_cast<void*>(address),
+-                        &Core::NceHooks::s_hooks[i].original_instruction, sizeof(u32));
++    const auto hook_slot = Core::NceHooks::FindHookSlotByAddress(address);
++    if (!hook_slot.has_value()) {
++        NCE_LOG_WARNING("NceRemoveExternalHook: No hook at %016llX", (unsigned long long)address);
++        return false;
++    }
+ 
+-            // Restore memory protection to read-execute
+-            mprotect(page_start, page_size, PROT_READ | PROT_EXEC);
++    u64 entry_address{};
++    u32 original_instruction{};
++    Core::NceHooks::HookCallback entry_callback = nullptr;
++    if (!Core::NceHooks::ReadHookEntryStable(Core::NceHooks::s_hooks[*hook_slot], &entry_address,
++                                             &original_instruction, &entry_callback) ||
++        entry_address != address || entry_callback == nullptr) {
++        NCE_LOG_WARNING("NceRemoveExternalHook: Hook slot became unstable for %016llX",
++                        (unsigned long long)address);
++        return false;
++    }
+ 
+-            // Move last entry to this slot
+-            if (i < count - 1) {
+-                Core::NceHooks::s_hooks[i] = Core::NceHooks::s_hooks[count - 1];
+-            }
++    // Restore the original instruction directly to host memory.
++    // First, make the page writable.
++    const auto protect_range = Core::NceHooks::GetMemoryProtectRange(address, sizeof(u32));
++    if (mprotect(protect_range.page_start, protect_range.page_size,
++                 PROT_READ | PROT_WRITE | PROT_EXEC) != 0) {
++        NCE_LOG_ERROR("NceRemoveExternalHook: mprotect failed at %016llX: %s",
++                      (unsigned long long)address, strerror(errno));
++        return false;
++    }
+ 
+-            Core::NceHooks::s_hooks[count - 1].address = 0;
+-            Core::NceHooks::s_hooks[count - 1].callback = nullptr;
++    std::memcpy(reinterpret_cast<void*>(address), &original_instruction, sizeof(u32));
+ 
+-            std::atomic_thread_fence(std::memory_order_release);
+-            Core::NceHooks::s_hook_count.store(count - 1, std::memory_order_release);
++    // Restore memory protection to read-execute.
++    if (mprotect(protect_range.page_start, protect_range.page_size,
++                 PROT_READ | PROT_EXEC) != 0) {
++        NCE_LOG_WARNING("NceRemoveExternalHook: Failed to restore RX protection at %016llX: %s",
++                        (unsigned long long)address, strerror(errno));
++    }
+ 
+-            // Remove the trampoline entry
+-            Core::NceHooks::UnregisterTrampoline(address);
++    Core::NceHooks::ClearHookEntry(*hook_slot);
++    const size_t hook_count = Core::NceHooks::s_hook_count.load(std::memory_order_relaxed);
++    if (hook_count > 0) {
++        Core::NceHooks::s_hook_count.store(hook_count - 1, std::memory_order_release);
++    }
+ 
+-            // Invalidate instruction cache
+-            __builtin___clear_cache(reinterpret_cast<char*>(address),
+-                                    reinterpret_cast<char*>(address + sizeof(u32)));
++    // Remove the trampoline entry.
++    Core::NceHooks::UnregisterTrampoline(address);
+ 
+-            NCE_LOG_INFO("NceRemoveExternalHook: Removed hook at %016llX", (unsigned long long)address);
+-            return true;
+-        }
+-    }
++    // Invalidate instruction cache.
++    __builtin___clear_cache(reinterpret_cast<char*>(address),
++                            reinterpret_cast<char*>(address + sizeof(u32)));
+ 
+-    NCE_LOG_WARNING("NceRemoveExternalHook: No hook at %016llX", (unsigned long long)address);
+-    return false;
++    NCE_LOG_INFO("NceRemoveExternalHook: Removed hook at %016llX", (unsigned long long)address);
++    return true;
+ }
+ 
+ __attribute__((noinline)) void NceTrampoline(u64 pc, void* context_ptr) {
+@@ -519,35 +791,33 @@ void* NceGetCurrentContext() {
+ 
+ void NceClearAllHooks() {
+     std::lock_guard lock(Core::NceHooks::s_hooks_install_mutex);
+-    std::lock_guard tramp_lock(Core::NceHooks::s_trampoline_mutex);
+-
+     const size_t page_count = Core::NceHooks::s_trampoline_pages.size();
+-    const size_t hook_count = Core::NceHooks::s_hook_count.load(std::memory_order_relaxed);
++    const size_t hook_count = Core::NceHooks::CountHooks();
++    const size_t trampoline_count = Core::NceHooks::CountTrampolines();
+ 
+     // Clear hook entries (don't restore instructions - old addresses may be unmapped)
+     for (size_t i = 0; i < Core::NceHooks::MaxHooks; ++i) {
+-        Core::NceHooks::s_hooks[i].address = 0;
+-        Core::NceHooks::s_hooks[i].callback = nullptr;
++        Core::NceHooks::ClearHookEntry(i);
+     }
+     Core::NceHooks::s_hook_count.store(0, std::memory_order_release);
+ 
+     // Clear trampoline entries
+     for (size_t i = 0; i < Core::NceHooks::MaxTrampolines; ++i) {
+-        Core::NceHooks::s_trampolines[i].address = 0;
+-        Core::NceHooks::s_trampolines[i].trampoline_address = 0;
++        Core::NceHooks::ClearTrampolineEntry(i);
+     }
+     Core::NceHooks::s_trampoline_count.store(0, std::memory_order_release);
+ 
+     // Free trampoline pages
++    const size_t page_size = Core::NceHooks::GetHostPageSize();
+     for (void* page : Core::NceHooks::s_trampoline_pages) {
+-        munmap(page, Core::NceHooks::TrampolinePageSize);
++        munmap(page, page_size);
+     }
+     Core::NceHooks::s_trampoline_pages.clear();
+     Core::NceHooks::s_current_page = nullptr;
+     Core::NceHooks::s_page_offset = 0;
+ 
+-    NCE_LOG_INFO("NceClearAllHooks: Cleared %zu hooks and freed %zu trampoline pages",
+-                 hook_count, page_count);
++    NCE_LOG_INFO("NceClearAllHooks: Cleared %zu hooks, %zu trampolines, freed %zu trampoline pages",
++                 hook_count, trampoline_count, page_count);
+ }
+ 
+ void NceRegisterLogCallback(NceLogCallback callback) {
