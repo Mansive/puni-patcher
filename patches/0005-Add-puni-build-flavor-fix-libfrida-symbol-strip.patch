@@ -1,4 +1,4 @@
-From eaed4966b95cacbe22edd67cd2178e0a54f8bd0c Mon Sep 17 00:00:00 2001
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Mansive <33560917+Mansive@users.noreply.github.com>
 Date: Tue, 6 Jan 2026 00:30:10 -0600
 Subject: [PATCH] Add puni build flavor, fix libfrida symbol strip
@@ -8,10 +8,10 @@ Subject: [PATCH] Add puni build flavor, fix libfrida symbol strip
  1 file changed, 11 insertions(+), 2 deletions(-)
 
 diff --git a/src/android/app/build.gradle.kts b/src/android/app/build.gradle.kts
-index d1b026a18f..075ab3137b 100644
+index 5763391fd6..e09a036d9f 100644
 --- a/src/android/app/build.gradle.kts
 +++ b/src/android/app/build.gradle.kts
-@@ -54,8 +54,8 @@ android {
+@@ -58,8 +58,8 @@ android {
          // This is necessary for libadrenotools custom driver loading
          jniLibs.useLegacyPackaging = true
  
@@ -22,7 +22,7 @@ index d1b026a18f..075ab3137b 100644
      }
  
      androidResources {
-@@ -238,6 +238,15 @@ android {
+@@ -254,6 +254,15 @@ android {
                  }
              }
          }

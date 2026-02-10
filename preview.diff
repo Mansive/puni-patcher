@@ -10,10 +10,10 @@ index 0be76d85cd..2e50a5fded 100644
 +libfrida*
 \ No newline at end of file
 diff --git a/src/android/app/build.gradle.kts b/src/android/app/build.gradle.kts
-index 185704c8fe..075ab3137b 100644
+index 06c35669ce..e09a036d9f 100644
 --- a/src/android/app/build.gradle.kts
 +++ b/src/android/app/build.gradle.kts
-@@ -53,6 +53,9 @@ android {
+@@ -57,6 +57,9 @@ android {
      packaging {
          // This is necessary for libadrenotools custom driver loading
          jniLibs.useLegacyPackaging = true
@@ -23,17 +23,16 @@ index 185704c8fe..075ab3137b 100644
      }
  
      androidResources {
-@@ -71,6 +74,9 @@ android {
-                 val extraCMakeArgs =
+@@ -76,6 +79,8 @@ android {
                      (project.findProperty("YUZU_ANDROID_ARGS") as String?)?.split("\\s+".toRegex())
                          ?: emptyList()
-+
+ 
 +                val jniLibsPath = projectDir.resolve("src/main/jniLibs/arm64-v8a").absolutePath
 +
                  arguments.addAll(
                      listOf(
                          "-DENABLE_QT=0", // Don't use QT
-@@ -85,6 +91,7 @@ android {
+@@ -90,6 +95,7 @@ android {
                          "-DBUILD_TESTING=OFF",
                          "-DYUZU_TESTS=OFF",
                          "-DDYNARMIC_TESTS=OFF",
@@ -41,7 +40,7 @@ index 185704c8fe..075ab3137b 100644
                          *extraCMakeArgs.toTypedArray()
                      )
                  )
-@@ -231,6 +238,15 @@ android {
+@@ -248,6 +254,15 @@ android {
                  }
              }
          }
@@ -71,7 +70,7 @@ index 14eb331d24..03ddcf5a0e 100644
          arm/nce/patcher.h
          arm/nce/visitor_base.h)
 diff --git a/src/core/arm/nce/arm_nce.cpp b/src/core/arm/nce/arm_nce.cpp
-index cc1e016ba1..1394b6f370 100644
+index bbff9f2829..86e9c8a437 100644
 --- a/src/core/arm/nce/arm_nce.cpp
 +++ b/src/core/arm/nce/arm_nce.cpp
 @@ -10,6 +10,7 @@
@@ -90,7 +89,7 @@ index cc1e016ba1..1394b6f370 100644
  
  // Verify assembly offsets.
  using NativeExecutionParameters = Kernel::KThread::NativeExecutionParameters;
-@@ -181,6 +183,49 @@ void ArmNce::HandleHostAccessFault(int sig, void* raw_info, void* raw_context) {
+@@ -182,6 +184,49 @@ void ArmNce::HandleHostAccessFault(int sig, void* raw_info, void* raw_context) {
      return g_orig_segv_action.sa_sigaction(sig, static_cast<siginfo_t*>(raw_info), raw_context);
  }
  
@@ -140,7 +139,7 @@ index cc1e016ba1..1394b6f370 100644
  void ArmNce::LockThread(Kernel::KThread* thread) {
      auto* thread_params = &thread->GetNativeExecutionParameters();
      LockThreadParameters(thread_params);
-@@ -301,6 +346,7 @@ void ArmNce::Initialize() {
+@@ -302,6 +347,7 @@ void ArmNce::Initialize() {
          sigaddset(&signal_mask, BreakFromRunCodeSignal);
          sigaddset(&signal_mask, GuestAlignmentFaultSignal);
          sigaddset(&signal_mask, GuestAccessFaultSignal);
@@ -148,7 +147,7 @@ index cc1e016ba1..1394b6f370 100644
  
          struct sigaction return_to_run_code_action {};
          return_to_run_code_action.sa_flags = SA_SIGINFO | SA_ONSTACK;
-@@ -330,6 +376,14 @@ void ArmNce::Initialize() {
+@@ -331,6 +377,14 @@ void ArmNce::Initialize() {
              reinterpret_cast<HandlerType>(&ArmNce::GuestAccessFaultSignalHandler);
          access_fault_action.sa_mask = signal_mask;
          Common::SigAction(GuestAccessFaultSignal, &access_fault_action, &g_orig_segv_action);

@@ -1,4 +1,4 @@
-From 10ae80835721b3050ba173d6be627faf051729a1 Mon Sep 17 00:00:00 2001
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Mansive <33560917+Mansive@users.noreply.github.com>
 Date: Mon, 5 Jan 2026 22:32:42 -0600
 Subject: [PATCH] Revert change to AndroidManifest.xml

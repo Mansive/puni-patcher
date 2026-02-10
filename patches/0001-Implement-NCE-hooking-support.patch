@@ -1,4 +1,4 @@
-From e68c0f9887519b403dcaa305fb9118e83db588af Mon Sep 17 00:00:00 2001
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: Mansive <33560917+Mansive@users.noreply.github.com>
 Date: Fri, 2 Jan 2026 16:38:42 -0600
 Subject: [PATCH] Implement NCE hooking support
@@ -62,7 +62,7 @@ Proper hooks for alice even with frida presence
 Taishou x Alice hooks
 ---
  docs/eden-puni.code-workspace                |  18 +
- src/android/app/build.gradle.kts             |   7 +
+ src/android/app/build.gradle.kts             |   6 +
  src/android/app/src/main/AndroidManifest.xml |   3 +-
  src/android/gradle.properties                |   3 +-
  src/core/CMakeLists.txt                      |   2 +
@@ -74,7 +74,7 @@ Taishou x Alice hooks
  src/core/arm/nce/interpreter_visitor.h       |  24 +-
  src/core/arm/nce/nce_hooks.cpp               | 556 +++++++++++++++++++
  src/core/arm/nce/nce_hooks.h                 | 105 ++++
- 13 files changed, 962 insertions(+), 6 deletions(-)
+ 13 files changed, 961 insertions(+), 6 deletions(-)
  create mode 100644 docs/eden-puni.code-workspace
  create mode 100644 src/core/arm/nce/nce_hooks.cpp
  create mode 100644 src/core/arm/nce/nce_hooks.h
@@ -104,10 +104,10 @@ index 0000000000..0096a20e73
 +  }
 +}
 diff --git a/src/android/app/build.gradle.kts b/src/android/app/build.gradle.kts
-index 185704c8fe..d1b026a18f 100644
+index 06c35669ce..5763391fd6 100644
 --- a/src/android/app/build.gradle.kts
 +++ b/src/android/app/build.gradle.kts
-@@ -53,6 +53,9 @@ android {
+@@ -57,6 +57,9 @@ android {
      packaging {
          // This is necessary for libadrenotools custom driver loading
          jniLibs.useLegacyPackaging = true
@@ -117,17 +117,16 @@ index 185704c8fe..d1b026a18f 100644
      }
  
      androidResources {
-@@ -71,6 +74,9 @@ android {
-                 val extraCMakeArgs =
+@@ -76,6 +79,8 @@ android {
                      (project.findProperty("YUZU_ANDROID_ARGS") as String?)?.split("\\s+".toRegex())
                          ?: emptyList()
-+
+ 
 +                val jniLibsPath = projectDir.resolve("src/main/jniLibs/arm64-v8a").absolutePath
 +
                  arguments.addAll(
                      listOf(
                          "-DENABLE_QT=0", // Don't use QT
-@@ -85,6 +91,7 @@ android {
+@@ -90,6 +95,7 @@ android {
                          "-DBUILD_TESTING=OFF",
                          "-DYUZU_TESTS=OFF",
                          "-DDYNARMIC_TESTS=OFF",
@@ -176,7 +175,7 @@ index 14eb331d24..03ddcf5a0e 100644
          arm/nce/patcher.h
          arm/nce/visitor_base.h)
 diff --git a/src/core/arm/nce/arm_nce.cpp b/src/core/arm/nce/arm_nce.cpp
-index cc1e016ba1..1394b6f370 100644
+index bbff9f2829..86e9c8a437 100644
 --- a/src/core/arm/nce/arm_nce.cpp
 +++ b/src/core/arm/nce/arm_nce.cpp
 @@ -10,6 +10,7 @@
@@ -195,7 +194,7 @@ index cc1e016ba1..1394b6f370 100644
  
  // Verify assembly offsets.
  using NativeExecutionParameters = Kernel::KThread::NativeExecutionParameters;
-@@ -181,6 +183,49 @@ void ArmNce::HandleHostAccessFault(int sig, void* raw_info, void* raw_context) {
+@@ -182,6 +184,49 @@ void ArmNce::HandleHostAccessFault(int sig, void* raw_info, void* raw_context) {
      return g_orig_segv_action.sa_sigaction(sig, static_cast<siginfo_t*>(raw_info), raw_context);
  }
  
@@ -245,7 +244,7 @@ index cc1e016ba1..1394b6f370 100644
  void ArmNce::LockThread(Kernel::KThread* thread) {
      auto* thread_params = &thread->GetNativeExecutionParameters();
      LockThreadParameters(thread_params);
-@@ -301,6 +346,7 @@ void ArmNce::Initialize() {
+@@ -302,6 +347,7 @@ void ArmNce::Initialize() {
          sigaddset(&signal_mask, BreakFromRunCodeSignal);
          sigaddset(&signal_mask, GuestAlignmentFaultSignal);
          sigaddset(&signal_mask, GuestAccessFaultSignal);
@@ -253,7 +252,7 @@ index cc1e016ba1..1394b6f370 100644
  
          struct sigaction return_to_run_code_action {};
          return_to_run_code_action.sa_flags = SA_SIGINFO | SA_ONSTACK;
-@@ -330,6 +376,14 @@ void ArmNce::Initialize() {
+@@ -331,6 +377,14 @@ void ArmNce::Initialize() {
              reinterpret_cast<HandlerType>(&ArmNce::GuestAccessFaultSignalHandler);
          access_fault_action.sa_mask = signal_mask;
          Common::SigAction(GuestAccessFaultSignal, &access_fault_action, &g_orig_segv_action);
