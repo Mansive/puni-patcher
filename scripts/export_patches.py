@@ -75,10 +75,15 @@ def clean_old_patches():
 
 
 def generate_patches(eden_repo: Path):
-    """Run git format-patch to create individual patch files."""
+    """Run git format-patch to create individual patch files.
+
+    --zero-commit keeps patch headers stable across rebases by replacing
+    commit IDs in the "From <sha>" line with zeros.
+    """
     print_header(2, 5, "Generating patches (git format-patch)...")
     run_git(
         "format-patch",
+        "--zero-commit",
         "--no-numbered",
         "--no-signature",
         "--start-number",
