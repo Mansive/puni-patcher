@@ -5,3 +5,4 @@
 0005-Add-puni-build-flavor-fix-libfrida-symbol-strip.patch
 0006-Revise-some-logs-for-clarity.patch
 0007-Harden-NCE-hook-handling-and-fix-PC-relative.patch
+0008-Fix-Fetch-crash.patch

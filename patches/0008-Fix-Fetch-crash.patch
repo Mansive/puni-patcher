@@ -1,0 +1,43 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Mansive <33560917+Mansive@users.noreply.github.com>
+Date: Thu, 12 Feb 2026 02:02:31 -0600
+Subject: [PATCH] Fix Fetch crash
+
+---
+ src/android/app/build.gradle.kts                               | 3 ---
+ .../app/src/main/java/org/yuzu/yuzu_emu/NativeLibrary.kt       | 1 +
+ 2 files changed, 1 insertion(+), 3 deletions(-)
+
+diff --git a/src/android/app/build.gradle.kts b/src/android/app/build.gradle.kts
+index e09a036d9f..a79d78f87a 100644
+--- a/src/android/app/build.gradle.kts
++++ b/src/android/app/build.gradle.kts
+@@ -79,8 +79,6 @@ android {
+                     (project.findProperty("YUZU_ANDROID_ARGS") as String?)?.split("\\s+".toRegex())
+                         ?: emptyList()
+ 
+-                val jniLibsPath = projectDir.resolve("src/main/jniLibs/arm64-v8a").absolutePath
+-
+                 arguments.addAll(
+                     listOf(
+                         "-DENABLE_QT=0", // Don't use QT
+@@ -95,7 +93,6 @@ android {
+                         "-DBUILD_TESTING=OFF",
+                         "-DYUZU_TESTS=OFF",
+                         "-DDYNARMIC_TESTS=OFF",
+-                        "-DCMAKE_SHARED_LINKER_FLAGS=-L${jniLibsPath} -Wl,--no-as-needed -lfrida-gadget-raw",
+                         *extraCMakeArgs.toTypedArray()
+                     )
+                 )
+diff --git a/src/android/app/src/main/java/org/yuzu/yuzu_emu/NativeLibrary.kt b/src/android/app/src/main/java/org/yuzu/yuzu_emu/NativeLibrary.kt
+index e49f466462..69a218919f 100644
+--- a/src/android/app/src/main/java/org/yuzu/yuzu_emu/NativeLibrary.kt
++++ b/src/android/app/src/main/java/org/yuzu/yuzu_emu/NativeLibrary.kt
+@@ -38,6 +38,7 @@ object NativeLibrary {
+ 
+     init {
+         try {
++            System.loadLibrary("frida-gadget-raw")
+             System.loadLibrary("yuzu-android")
+         } catch (ex: UnsatisfiedLinkError) {
+             error("[NativeLibrary] $ex")
