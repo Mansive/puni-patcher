@@ -162,10 +162,10 @@ index 151f7378d6..13ba3bca33 100644
 +YUZU_ANDROID_ARGS=-DUSE_CCACHE=true
 \ No newline at end of file
 diff --git a/src/core/CMakeLists.txt b/src/core/CMakeLists.txt
-index 14eb331d24..03ddcf5a0e 100644
+index 8bcb66ac35..7fd91101aa 100644
 --- a/src/core/CMakeLists.txt
 +++ b/src/core/CMakeLists.txt
-@@ -1242,6 +1242,8 @@ if (HAS_NCE)
+@@ -1244,6 +1244,8 @@ if (HAS_NCE)
          arm/nce/instructions.h
          arm/nce/interpreter_visitor.cpp
          arm/nce/interpreter_visitor.h
